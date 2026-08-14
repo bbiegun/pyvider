@@ -1,5 +1,7 @@
 # CI workflow for Python projects
-# Uses wrknv tasks for consistency between local and CI environments.
+# Delegates to the org-wide reusable pipeline (matrix testing, coverage gate,
+# security + secret scanning) while running checks through wrknv (`we run <task>`)
+# so CI and local dev use the exact same commands.
 name: ⚙️ Continuous Integration
 
 on:
@@ -9,53 +11,22 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
-    runs-on: ubuntu-24.04
-    env:
-      WRKNV_TASK_RUNNER: uv run
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-
-      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57  # v8.0.0
-        with:
-          enable-cache: true
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Reset project environment
-        run: |
-          if [ -d .venv ]; then
-            mv .venv ".venv.pre-act.$(date +%s)"
-          fi
-
-      - name: Install dependencies
-        run: uv sync --all-groups
-
-      - name: Install wrknv
-        run: uv pip install --python .venv/bin/python "wrknv @ git+https://github.com/provide-io/wrknv.git@main"
-
-      - name: Check formatting
-        run: .venv/bin/we run format.check
-
-      - name: Run lint
-        run: .venv/bin/we run lint
-
-      - name: Run typecheck
-        run: .venv/bin/we run typecheck
-
-      - name: Run tests
-        run: .venv/bin/we run test
-
-      - name: Build package
-        run: .venv/bin/we run build
-
-      - name: Run security scan
-        run: .venv/bin/we run security
-
-      - name: 📤 Upload Artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
-        with:
-          name: dist
-          path: dist/
+    uses: provide-io/ci-tooling/.github/workflows/python-ci.yml@v0
+    with:
+      python-version: '3.11'
+      use-wrknv: true
+      platform-preset: standard  # ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel
+      coverage-threshold: 0  # not yet enforced on the wrknv path (test.coverage has no --cov-fail-under)
+      run-security: true
+      run-secret-scan: true
+    secrets: inherit
