@@ -78,8 +78,8 @@ check = "ruff format . && ruff check . && mypy src/"
 [tasks.ci]
 stream_output = true
 _default = [
-    "quality",
-    "test",
+    "ci.quality",
+    "ci.test",
     "build",
 ]
 test = [
