@@ -100,6 +100,31 @@ def _apply_schema_marks_iterative(root_value: CtyValue, root_schema: PvsType | C
     return results.get(id(root_value), root_value)
 
 
+def _unmark_deep(value: Any) -> Any:
+    """A copy of `value` with every mark removed, at any depth.
+
+    Iterative for the same reason `_apply_schema_marks_iterative` is: a deeply
+    nested state value must not blow the Python stack on the way to the wire.
+
+    Deliberately local rather than `pyvider.cty.marks.unmark_deep`, which only
+    exists from pyvider-cty 0.5. Keeping it here means this module behaves the
+    same against 0.4 and 0.5, so the two repositories can be released in either
+    order.
+    """
+    if not isinstance(value, CtyValue):
+        return value
+    inner = value.value
+    if isinstance(inner, dict):
+        rebuilt: Any = {k: _unmark_deep(v) for k, v in inner.items()}
+    elif isinstance(inner, list | tuple | frozenset | set):
+        rebuilt = type(inner)(_unmark_deep(v) for v in inner)
+    elif isinstance(inner, CtyValue):
+        rebuilt = _unmark_deep(inner)
+    else:
+        return attrs.evolve(value, marks=frozenset()) if value.marks else value
+    return attrs.evolve(value, value=rebuilt, marks=frozenset())
+
+
 def marshal(value: CtyValue | Any, *, schema: PvsType | CtyType) -> pb.DynamicValue:
     """
     Marshals a Python or CtyValue into a protobuf DynamicValue.
@@ -115,9 +140,27 @@ def marshal(value: CtyValue | Any, *, schema: PvsType | CtyType) -> pb.DynamicVa
         raw_value = attrs.asdict(value) if attrs.has(type(value)) else value
         validated_value = schema_cty_type.validate(raw_value)
 
-    final_cty_value = _apply_schema_marks_iterative(validated_value, schema)
-
-    msgpack_data = cty_to_msgpack(final_cty_value, schema_cty_type)
+    # Deliberately not marked on the way out. Marks have no wire
+    # representation -- tfplugin6.DynamicValue carries only msgpack and json --
+    # so applying schema marks here only to serialize immediately afterwards
+    # discarded them again. Sensitivity reaches Terraform through the schema
+    # instead (Schema.Attribute.sensitive), which is why nothing was lost.
+    #
+    # pyvider-cty now refuses to serialize a marked value rather than dropping
+    # the marks silently, matching go-cty, so marking here would fail every
+    # sensitive attribute at apply time.
+    #
+    # The inbound direction still marks: see the plan and apply handlers, where
+    # `_apply_schema_marks_iterative` is how a resource learns an attribute is
+    # sensitive at all, marks having not survived the wire.
+    #
+    # Which is exactly why the value is unmarked here rather than merely left
+    # alone. Resource code is handed a marked config and may legitimately build
+    # its planned or new state out of it, so marked values do reach this
+    # function -- and reaching cty's refusal would crash the provider at plan or
+    # apply. This is the wire boundary and the one place that may drop marks:
+    # sensitivity travels to Terraform in the schema, not the value.
+    msgpack_data = cty_to_msgpack(_unmark_deep(validated_value), schema_cty_type)
     return pb.DynamicValue(msgpack=msgpack_data)
 
 
