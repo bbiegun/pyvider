@@ -47,6 +47,7 @@ class ProviderHandler(ProviderServicer):
             ReadResourceHandler,
             RenewEphemeralResourceHandler,
             StopProviderHandler,
+            UpgradeResourceIdentityHandler,
             UpgradeResourceStateHandler,
             ValidateDataResourceConfigHandler,
             ValidateEphemeralResourceConfigHandler,
@@ -70,6 +71,7 @@ class ProviderHandler(ProviderServicer):
             "ApplyResourceChange": ApplyResourceChangeHandler,
             "ImportResourceState": ImportResourceStateHandler,
             "UpgradeResourceState": UpgradeResourceStateHandler,
+            "UpgradeResourceIdentity": UpgradeResourceIdentityHandler,
             "MoveResourceState": MoveResourceStateHandler,
             "ValidateDataResourceConfig": ValidateDataResourceConfigHandler,
             "ReadDataSource": ReadDataSourceHandler,
@@ -213,6 +215,9 @@ class ProviderHandler(ProviderServicer):
 
     async def UpgradeResourceState(self, request: Any, context: Any) -> Any:
         return await self._delegate("UpgradeResourceState", request, context)
+
+    async def UpgradeResourceIdentity(self, request: Any, context: Any) -> Any:
+        return await self._delegate("UpgradeResourceIdentity", request, context)
 
     async def MoveResourceState(self, request: Any, context: Any) -> Any:
         return await self._delegate("MoveResourceState", request, context)

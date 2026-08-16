@@ -22,6 +22,9 @@ from pyvider.protocols.tfprotov6.handlers.read_data_source import ReadDataSource
 from pyvider.protocols.tfprotov6.handlers.read_resource import ReadResourceHandler
 from pyvider.protocols.tfprotov6.handlers.renew_ephemeral_resource import RenewEphemeralResourceHandler
 from pyvider.protocols.tfprotov6.handlers.stop_provider import StopProviderHandler
+from pyvider.protocols.tfprotov6.handlers.upgrade_resource_identity import (
+    UpgradeResourceIdentityHandler,
+)
 from pyvider.protocols.tfprotov6.handlers.upgrade_resource_state import UpgradeResourceStateHandler
 from pyvider.protocols.tfprotov6.handlers.validate_data_resource_config import (
     ValidateDataResourceConfigHandler,
@@ -49,6 +52,7 @@ __all__ = [
     "ReadResourceHandler",
     "RenewEphemeralResourceHandler",
     "StopProviderHandler",
+    "UpgradeResourceIdentityHandler",
     "UpgradeResourceStateHandler",
     "ValidateDataResourceConfigHandler",
     "ValidateEphemeralResourceConfigHandler",
