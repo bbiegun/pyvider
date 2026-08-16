@@ -46,7 +46,7 @@ resources are therefore phase 2 of this work, not a separate feature.
 
 **In scope**
 
-- `PvsIdentitySchema` / `PvsIdentityAttribute` schema types and factories
+- `s_identity()` / `i_*()` factories over the existing `PvsSchema` types
 - Opt-in `get_identity_schema()` on `BaseResource`, with value derivation
 - `GetResourceIdentitySchemas` and `UpgradeResourceIdentity` handlers
 - Identity threaded through `ReadResource`, `PlanResourceChange`,
@@ -67,67 +67,80 @@ cache are untouched.
 
 ## Design
 
-### Schema types
+### Schema representation
 
-New module `src/pyvider/schema/types/identity.py`:
+**No new schema types.** An identity schema is a `PvsSchema`, and an identity
+attribute is a `PvsAttribute`. The existing types already fit:
 
-```python
-@define(frozen=True, kw_only=True)
-class PvsIdentityAttribute:
-    name: str = field(default="")
-    type: CtyType = field()
-    required_for_import: bool = field(default=False)
-    optional_for_import: bool = field(default=False)
-    description: str = field(default="")
+| Identity needs | Existing type provides |
+| --- | --- |
+| a version, separate from the resource schema's | `PvsSchema.version` |
+| a set of named, typed attributes | `PvsObjectType.attributes` |
+| `required_for_import` | `PvsAttribute.required` |
+| `optional_for_import` | `PvsAttribute.optional` |
+| description | `PvsAttribute.description` |
+| an object type for marshalling identity data | `PvsObjectType.to_cty_type()` |
 
-@define(frozen=True, kw_only=True)
-class PvsIdentitySchema:
-    version: int = field(default=1, validator=lambda i, a, v: v >= 0)
-    attributes: dict[str, PvsIdentityAttribute] = field(factory=dict)
+The two import flags map cleanly onto `required` / `optional` because they are
+the same axis — who must supply the value — scoped to import. The proto defines
+`required_for_import` as "must be defined for ImportResourceState to complete
+successfully" and `optional_for_import` as "not required for
+ImportResourceState, because it can be supplied by the provider".
 
-    def to_cty_type(self) -> CtyObject: ...
-```
+Reuse also inherits validation instead of reimplementing it.
+`PvsAttribute.__attrs_post_init__` already defaults an unflagged attribute to
+`optional`, and already resolves required-and-optional in favour of required —
+which is exactly the rule identity needs, and which a parallel
+`PvsIdentityAttribute` would have had to restate.
 
-These are deliberately **not** flags on `PvsAttribute`:
+The decisive point is `to_cty_type()`. Identity data marshals over the same
+msgpack path as everything else, against the `CtyObject` implied by its
+attributes. `PvsObjectType.to_cty_type()` already produces that. A separate
+identity type would have to reimplement it.
 
-- Identity carries a version independent of the resource schema version, and
-  `PvsSchema.version` is already taken.
-- `required_for_import` / `optional_for_import` are meaningless on the other
-  ~99% of attributes, and adding them would put dead fields on every attribute
-  in every schema in the ecosystem.
-- Terraform transmits identity schemas as a distinct message
-  (`ResourceIdentitySchema`, not `Schema`) over a distinct RPC. Mirroring that
-  split keeps the conversion layer a straight field-for-field mapping rather
-  than a filter-and-reinterpret pass over the resource schema.
+What reuse gives up, and how each is handled:
 
-`version` validates as non-negative, not positive: the proto states identity
-versioning "implicitly starts at 0". This differs from `PvsSchema.version`,
-which validates `> 0`.
-
-**Validation rule** (pyvider's choice, not enforced by Terraform core, which
-only decodes): `required_for_import` and `optional_for_import` may not both be
-true. Both false is legal and means the attribute is provider-supplied and
-cannot be used to address the resource on import.
+- **`PvsSchema` can express nested blocks and collection types, which are
+  invalid for identity.** Identity must be "wholly representative of all data
+  necessary to compare two managed resource instances" and is compared by
+  equality. Rejected at conversion time (see below) rather than made
+  unrepresentable.
+- **`computed`, `sensitive`, `default`, and `object_type` are meaningless on an
+  identity attribute.** Prevented by the builder surface — the `i_*` factories
+  do not accept them.
+- **`version` validates `> 0`, while the proto says identity versioning
+  "implicitly starts at 0".** Identity versions default to 1 and increment from
+  there. Terraform only compares identity versions for equality when deciding
+  whether to call `UpgradeResourceIdentity`, so the starting number is a
+  provider-internal convention; only self-consistency matters.
 
 ### Factory helpers
 
 `src/pyvider/schema/factory.py` gains `s_identity()` plus `i_str()`, `i_num()`,
-and `i_bool()`, exported from `pyvider.schema`:
+and `i_bool()`, exported from `pyvider.schema`. `s_identity` returns a
+`PvsSchema`; the `i_*` builders return `PvsAttribute`:
 
 ```python
 @classmethod
-def get_identity_schema(cls) -> PvsIdentitySchema:
+def get_identity_schema(cls) -> PvsSchema:
     return s_identity(
         version=1,
         attributes={"path": i_str(required_for_import=True)},
     )
 ```
 
-Only scalar builders are provided. Identity is required to be "wholly
-representative of all data necessary to compare two managed resource instances"
-and is compared by equality, so nested or collection-typed identity is a design
-error. Offering no `i_list` / `i_obj` enforces flatness structurally instead of
-by documentation.
+The builders exist for two reasons beyond convenience. They keep protocol
+vocabulary at the call site — `required_for_import=True` rather than a bare
+`required=True` that means something subtly different here — and, by offering no
+`i_list` / `i_obj` / `i_dyn`, they make flat scalar identity the only shape
+reachable from the public API.
+
+```python
+def i_str(description: str = "", *, required_for_import: bool = False,
+          optional_for_import: bool = False) -> PvsAttribute:
+    return a_str(description, required=required_for_import,
+                 optional=optional_for_import)
+```
 
 ### Resource API
 
@@ -137,7 +150,7 @@ existing pattern of a small required surface (`get_schema`, `read`,
 
 ```python
 @classmethod
-def get_identity_schema(cls) -> PvsIdentitySchema | None:
+def get_identity_schema(cls) -> PvsSchema | None:
     """Opt in to resource identity. None means this resource has none."""
     return None
 
@@ -175,18 +188,27 @@ resource-specific.
 
 `src/pyvider/conversion/schema_adapter.py` gains
 `pvs_identity_schema_to_proto()`, reusing the existing cached
-`_encode_cty_type_bytes()` for attribute types. A new
-`src/pyvider/conversion/identity.py` provides the value codec:
+`_encode_cty_type_bytes()` for attribute types. Because identity reuses
+`PvsSchema`, this is where the shape constraints are enforced — it raises when
+the schema declares `block_types`, or when any attribute's type is not a scalar
+(`CtyString` / `CtyNumber` / `CtyBool`). Those states are unreachable through the
+`i_*` builders but representable by hand-constructing `PvsAttribute`, so the
+conversion boundary is the honest place to reject them.
+
+The flag mapping happens here too: `required` becomes `required_for_import` and
+`optional` becomes `optional_for_import`.
+
+A new `src/pyvider/conversion/identity.py` provides the value codec:
 
 ```python
-def marshal_identity(values, schema: PvsIdentitySchema) -> pb.ResourceIdentityData
-def unmarshal_identity(data: pb.ResourceIdentityData, schema: PvsIdentitySchema) -> dict[str, Any] | None
+def marshal_identity(values, schema: PvsSchema) -> pb.ResourceIdentityData
+def unmarshal_identity(data: pb.ResourceIdentityData, schema: PvsSchema) -> dict[str, Any] | None
 ```
 
 Both delegate to the existing `marshal` / `unmarshal` against
-`schema.to_cty_type()`, so identity uses the same msgpack path as everything
-else. `unmarshal_identity` returns `None` for absent or null identity so
-handlers do not have to distinguish "no identity sent" from "empty identity".
+`schema.block.to_cty_type()`, so identity uses the same msgpack path as
+everything else. `unmarshal_identity` returns `None` for absent or null identity
+so handlers do not have to distinguish "no identity sent" from "empty identity".
 
 ### Handlers
 
@@ -264,13 +286,15 @@ Identity-specific cases:
 TDD, per project convention. Test files stay under the 500-line cap, so this
 splits across several files rather than one per subsystem.
 
-- **Schema types** — attribute flag validation (both import flags true is an
-  error), version non-negative, `to_cty_type()` shape.
-- **Factories** — `s_identity` / `i_*` produce the expected types; scalar-only
-  surface.
-- **Conversion** — `pvs_identity_schema_to_proto` field mapping; identity value
-  round-trip through `marshal_identity` / `unmarshal_identity`, including null
-  and absent.
+- **Factories** — `s_identity` returns a `PvsSchema` and `i_*` return
+  `PvsAttribute`; `required_for_import` lands on `required`,
+  `optional_for_import` on `optional`; an unflagged identity attribute inherits
+  the existing default of `optional`, and setting both flags resolves to
+  required, both via `PvsAttribute.__attrs_post_init__` rather than new code.
+- **Conversion** — `pvs_identity_schema_to_proto` flag and field mapping;
+  rejection of a hand-built identity schema carrying `block_types` or a
+  non-scalar attribute type; identity value round-trip through
+  `marshal_identity` / `unmarshal_identity`, including null and absent.
 - **Derivation** — default `get_identity` against a state object; missing
   attribute, unknown value, and `None` state all yield `None`; override is
   honoured.
