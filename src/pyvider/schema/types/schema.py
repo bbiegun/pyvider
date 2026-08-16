@@ -12,7 +12,18 @@ from provide.foundation import logger
 from pyvider.cty import CtyValidationError
 
 # CORRECTED IMPORT: Replace the obsolete PvsBlock with the new PvsObjectType.
+from pyvider.schema.exceptions import PvsSchemaDefinitionError
 from pyvider.schema.types.object import PvsObjectType
+
+
+def _validate_version(instance: object, attribute: object, value: int) -> None:
+    """Reject schema versions below 1.
+
+    Replaces a lambda that returned a bool. attrs signals validation failure by
+    raising and discards return values, so the original enforced nothing.
+    """
+    if value < 1:
+        raise PvsSchemaDefinitionError(f"Schema version must be 1 or greater, got {value}.")
 
 
 @define(frozen=True, kw_only=True)
@@ -26,7 +37,7 @@ class PvsSchema:
         block: The root block of the schema, defining its attributes and nested blocks.
     """
 
-    version: int = field(validator=lambda i, a, v: v > 0)
+    version: int = field(validator=_validate_version)
     block: PvsObjectType = field()
 
     def validate_config(self, config: Any) -> None:

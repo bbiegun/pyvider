@@ -170,6 +170,26 @@ def s_provider(
     return _create_schema(1, attributes=attributes, block_types=block_types)
 
 
+def s_identity(
+    attributes: dict[str, PvsAttribute] | None = None,
+    version: int = 1,
+) -> PvsSchema:
+    """Create a resource identity schema.
+
+    Identity reuses PvsSchema and PvsAttribute rather than parallel types.
+    `required` on an attribute becomes `required_for_import` on the wire and
+    `optional` becomes `optional_for_import` -- the same collapse Terraform
+    core performs in ProtoToIdentitySchema.
+
+    Identity versions start at 1 and increment by 1 on each change; the floor is
+    enforced by PvsSchema.version.
+
+    Identity attributes must be flat scalars and must not set computed or
+    sensitive; both are enforced in pvs_identity_schema_to_proto.
+    """
+    return _create_schema(version, attributes=attributes)
+
+
 def s_function(
     parameters: list[PvsAttribute] | None = None,
     return_type: PvsAttribute | None = None,
