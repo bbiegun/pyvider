@@ -215,17 +215,22 @@ def _handle_planned_state_dict(
 def _derive_planned_identity_values(
     resource_class: Any,
     resource_schema: Any,
-    identity_schema: PvsSchema,
     planned_state_dict: dict[str, Any],
+    resource_type: str,
 ) -> dict[str, Any] | None:
     """Derive identity from the planned state, when fully determinable.
 
-    During plan, the planned state may legitimately contain unknown values --
-    an identity attribute depending on one is not knowable until apply. That
-    makes validation of the planned state, and therefore identity derivation,
-    something that can fail in the ordinary course of planning. An unknowable
-    identity must never become an error diagnostic, so any failure here just
-    means "not yet" and falls back to omitting identity.
+    The common "not yet knowable" case during plan -- an identity attribute
+    that depends on a value still unknown at plan time -- does not raise:
+    validation preserves the unknown, cty_to_attrs_instance yields None for
+    that field, and get_identity()'s own null-check returns None cleanly.
+    What this actually catches is malformed/incomplete planned-state data, or
+    a bug in a resource's custom get_identity() override -- genuine defects,
+    not "not yet". Identity is still omitted rather than surfaced as a
+    Terraform diagnostic here (a partial or unknown-bearing identity would
+    itself make Terraform report the provider as buggy), but the failure is
+    logged at WARNING so it is visible in provider logs instead of silently
+    disappearing.
     """
     try:
         identity_values: dict[str, Any] | None = resource_class.get_identity(
@@ -236,9 +241,12 @@ def _derive_planned_identity_values(
         )
         return identity_values
     except Exception as e:
-        logger.debug(
-            "Could not derive planned identity from planned state",
+        logger.warning(
+            "Omitting planned identity: derivation raised an exception, which may "
+            "indicate a bug in this resource's get_identity() override rather than an "
+            "identity value that is simply not yet knowable",
             operation="plan_resource_change",
+            resource_type=resource_type,
             error_type=type(e).__name__,
             error_message=str(e),
         )
@@ -319,7 +327,7 @@ async def _plan_resource_change_impl(
             identity_schema = resource_class.get_identity_schema()
             identity_values = (
                 _derive_planned_identity_values(
-                    resource_class, resource_schema, identity_schema, planned_state_dict
+                    resource_class, resource_schema, planned_state_dict, request.type_name
                 )
                 if identity_schema is not None
                 else None

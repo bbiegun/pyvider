@@ -130,6 +130,21 @@ class IdentityResourceReturningNone(_Base):
         return None
 
 
+class IdentityResourceRaisingOnDerive(_Base):
+    """A resource whose get_identity() override is buggy -- this is the actual case the
+    handler's broad except guards against, distinct from the (non-raising) unknown-value case."""
+
+    seen_identity: Any = None
+
+    @classmethod
+    def get_identity_schema(cls) -> PvsSchema:
+        return IDENTITY_SCHEMA
+
+    @classmethod
+    def get_identity(cls, state: Any) -> dict[str, Any] | None:
+        raise RuntimeError("boom: buggy get_identity() override")
+
+
 def _request(prior_identity: pb.ResourceIdentityData | None = None) -> pb.PlanResourceChange.Request:
     config = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
     proposed_new_state = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
@@ -191,6 +206,18 @@ async def test_impl_inbound_prior_identity_reaches_the_resource_context() -> Non
         await _plan_resource_change_impl(_request(prior_identity=inbound), context=None)
 
     assert IdentityResource.seen_identity == {"path": "/prior"}
+
+
+@pytest.mark.asyncio
+async def test_impl_omits_planned_identity_when_derivation_raises() -> None:
+    """A buggy get_identity() override (or malformed planned-state data) must not fail the
+    plan or surface as a diagnostic -- it is swallowed and identity is simply omitted, the
+    same as the not-yet-knowable case, but logged loudly since this one is a real defect."""
+    with _patched(IdentityResourceRaisingOnDerive):
+        response = await _plan_resource_change_impl(_request(), context=None)
+
+    assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
+    assert not response.HasField("planned_identity")
 
 
 # 🐍🏗️🔚
