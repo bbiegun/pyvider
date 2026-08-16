@@ -12,7 +12,7 @@ from provide.foundation import logger
 
 from pyvider.common.encryption import decrypt, encrypt
 from pyvider.common.operation_context import OperationContext, operation_context
-from pyvider.conversion import marshal, unmarshal
+from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_identity
 from pyvider.conversion.marshaler import _apply_schema_marks_iterative
 from pyvider.cty.exceptions import CtyValidationError
 from pyvider.exceptions import (
@@ -35,6 +35,7 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
+from pyvider.schema import PvsSchema
 
 
 async def _get_resource_and_provider_instances(type_name: str) -> tuple[Any, Any]:
@@ -169,6 +170,9 @@ def _create_resource_context(
     private_state_instance: Any,
     resource_class: Any,
     provider_instance: Any,
+    *,
+    identity_schema: PvsSchema | None = None,
+    planned_identity: pb.ResourceIdentityData | None = None,
 ) -> ResourceContext:
     config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class)
     prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
@@ -185,6 +189,9 @@ def _create_resource_context(
         config_cty=config_cty,
         capabilities=provider_instance.metadata.capabilities,
         test_mode_enabled=test_mode_enabled,
+        identity=(
+            unmarshal_identity(planned_identity, identity_schema) if identity_schema is not None else None
+        ),
     )
 
 
@@ -194,6 +201,9 @@ def _handle_apply_result(
     resource_schema: Any,
     planned_state_cty: Any,
     response: pb.ApplyResourceChange.Response,
+    *,
+    identity_schema: PvsSchema | None = None,
+    identity_values: dict[str, Any] | None = None,
 ) -> None:
     if new_state_attrs is not None:
         raw_new_state = attrs_to_dict_for_cty(new_state_attrs)
@@ -222,6 +232,9 @@ def _handle_apply_result(
 
         marshalled_new_state = marshal(new_state_cty, schema=resource_schema.block)
         response.new_state.msgpack = marshalled_new_state.msgpack
+
+        if identity_schema is not None and identity_values is not None:
+            response.new_identity.CopyFrom(marshal_identity(identity_values, identity_schema))
     else:
         response.new_state.msgpack = b"\xc0"
 
@@ -230,6 +243,36 @@ def _handle_apply_result(
         response.private = encrypt(serialized_bytes)
         logger.debug("Setting response.private", private=repr(response.private))
         logger.debug("Serialized private bytes", serialized_bytes=repr(serialized_bytes))
+
+
+def _derive_new_state_identity_values(
+    resource_class: Any,
+    new_state_attrs: Any,
+    resource_type: str,
+) -> dict[str, Any] | None:
+    """Derive identity from the post-apply state, which -- unlike plan -- is fully known.
+
+    A raised exception here is more suspicious than the analogous case during plan: the
+    new state is fully determined by this point, so there is no "not yet knowable" excuse.
+    A raise almost certainly indicates a bug in this resource's get_identity() override.
+    It is still not surfaced as a Terraform diagnostic -- the apply itself succeeded, and
+    failing the whole response over an identity-derivation bug would misreport a
+    successful create/update as a failure -- but it is logged at WARNING so it is visible
+    in provider logs instead of silently disappearing.
+    """
+    try:
+        identity_values: dict[str, Any] | None = resource_class.get_identity(new_state_attrs)
+        return identity_values
+    except Exception as e:
+        logger.warning(
+            "Omitting new identity: derivation raised an exception after a successful apply, "
+            "which likely indicates a bug in this resource's get_identity() override",
+            operation="apply_resource_change",
+            resource_type=resource_type,
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        return None
 
 
 @rpc_handler("ApplyResourceChange")
@@ -269,6 +312,8 @@ async def _apply_resource_change_impl(
 
         private_state_instance = await _process_private_state(resource_class, request.planned_private)
 
+        identity_schema = resource_class.get_identity_schema()
+
         resource_context = _create_resource_context(
             config_cty,
             prior_state_cty,
@@ -276,6 +321,8 @@ async def _apply_resource_change_impl(
             private_state_instance,
             resource_class,
             provider_instance,
+            identity_schema=identity_schema,
+            planned_identity=request.planned_identity,
         )
 
         logger.debug(
@@ -301,6 +348,12 @@ async def _apply_resource_change_impl(
             resource_schema,
             planned_state_cty,
             response,
+            identity_schema=identity_schema,
+            identity_values=(
+                _derive_new_state_identity_values(resource_class, new_state_attrs, request.type_name)
+                if identity_schema is not None
+                else None
+            ),
         )
 
     except (CtyValidationError, PyviderError) as e:
