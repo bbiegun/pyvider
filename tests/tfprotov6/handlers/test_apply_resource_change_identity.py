@@ -24,6 +24,9 @@ from pyvider.schema import PvsSchema, a_str, s_identity, s_resource
 MODULE = "pyvider.protocols.tfprotov6.handlers.apply_resource_change"
 IDENTITY_SCHEMA = s_identity(attributes={"path": a_str(required=True)})
 RESOURCE_SCHEMA = s_resource({"path": a_str(required=True)})
+# Declares an attribute that DemoState never has -- exercises the ordinary (non-raising)
+# None-return path when the identity schema doesn't resolve against the resource's state.
+MISMATCHED_IDENTITY_SCHEMA = s_identity(attributes={"id": a_str(required=True)})
 
 
 @define(frozen=True)
@@ -144,6 +147,35 @@ class IdentityResourceRaisingOnDerive(_Base):
         raise RuntimeError("boom: buggy get_identity() override")
 
 
+class IdentityResourceRaisingUnconditionally(_Base):
+    """A get_identity() override that does not guard for state is None -- unlike the
+    framework default, this one raises even on a destroy. Proves the call site skips
+    derivation entirely when there is no new state, rather than relying on this override
+    to guard itself."""
+
+    seen_identity: Any = None
+
+    @classmethod
+    def get_identity_schema(cls) -> PvsSchema:
+        return IDENTITY_SCHEMA
+
+    @classmethod
+    def get_identity(cls, state: Any) -> dict[str, Any] | None:
+        raise RuntimeError("boom: does not guard against state is None")
+
+
+class IdentityResourceWithMismatchedSchema(_Base):
+    """Declares an identity schema whose attributes don't exist on DemoState. Uses the
+    framework default get_identity(), which returns None (via getattr(..., None)) rather
+    than raising -- the ordinary, non-exceptional None-return path."""
+
+    seen_identity: Any = None
+
+    @classmethod
+    def get_identity_schema(cls) -> PvsSchema:
+        return MISMATCHED_IDENTITY_SCHEMA
+
+
 def _request(planned_identity: pb.ResourceIdentityData | None = None) -> pb.ApplyResourceChange.Request:
     config = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
     planned_state = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
@@ -156,6 +188,19 @@ def _request(planned_identity: pb.ResourceIdentityData | None = None) -> pb.Appl
     if planned_identity is not None:
         request.planned_identity.CopyFrom(planned_identity)
     return request
+
+
+def _destroy_request() -> pb.ApplyResourceChange.Request:
+    """A destroy request: prior_state is set, planned_state is left unset/null, which
+    drives BaseResource.apply()'s is_delete branch and leaves new_state_attrs as None."""
+    config = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
+    prior_state = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
+    return pb.ApplyResourceChange.Request(
+        type_name="demo",
+        config=config,
+        prior_state=prior_state,
+        planned_private=b"",
+    )
 
 
 def _patched(resource_class: Any) -> Any:
@@ -201,6 +246,38 @@ async def test_impl_omits_new_identity_when_derivation_raises() -> None:
     identity is simply omitted. Unlike plan, apply runs after state is fully known, so this
     is logged loudly (WARNING) as it is a genuine defect rather than a "not yet knowable"."""
     with _patched(IdentityResourceRaisingOnDerive):
+        response = await _apply_resource_change_impl(_request(), context=None)
+
+    assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
+    assert not response.HasField("new_identity")
+
+
+@pytest.mark.asyncio
+async def test_impl_skips_derivation_entirely_on_destroy() -> None:
+    """On destroy there is no new state, so identity derivation must not even be attempted
+    -- calling get_identity(None) would be misleading regardless of whether it raises or
+    returns cleanly. Uses a get_identity() that raises unconditionally (does not guard for
+    state is None, unlike the framework default) and asserts the derivation helper itself
+    is never called, not merely that the output looks right, since output correctness alone
+    would pass even if the (wrong) exception path silently produced the same result."""
+    with (
+        _patched(IdentityResourceRaisingUnconditionally),
+        patch(f"{MODULE}._derive_new_state_identity_values") as mock_derive,
+    ):
+        response = await _apply_resource_change_impl(_destroy_request(), context=None)
+
+    mock_derive.assert_not_called()
+    assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
+    assert not response.HasField("new_identity")
+
+
+@pytest.mark.asyncio
+async def test_impl_omits_new_identity_on_schema_state_mismatch() -> None:
+    """The new state is fully known (a create, not a destroy), yet get_identity() returns
+    None through the ordinary framework-default path because the identity schema's
+    attribute ("id") does not exist on DemoState. The apply still succeeds and identity is
+    simply omitted -- this is the schema/state-mismatch case Finding 2 warns about."""
+    with _patched(IdentityResourceWithMismatchedSchema):
         response = await _apply_resource_change_impl(_request(), context=None)
 
     assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
