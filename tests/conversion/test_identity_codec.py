@@ -34,3 +34,6 @@ def test_unmarshal_returns_none_for_null_identity() -> None:
     null_data = pb.ResourceIdentityData(identity_data=pb.DynamicValue(msgpack=b"\xc0"))
 
     assert unmarshal_identity(null_data, SCHEMA) is None
+
+
+# 🐍🏗️🔚

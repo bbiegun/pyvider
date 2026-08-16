@@ -57,6 +57,21 @@ class IdentityResource(_Base):
         return IDENTITY_SCHEMA
 
 
+class IdentityResourceReturningNone(_Base):
+    """Declares an identity schema, but get_identity() cannot derive a value (e.g. the
+    identity depends on data this resource doesn't have). Identity is omitted, not an error."""
+
+    seen_identity: Any = None
+
+    @classmethod
+    def get_identity_schema(cls) -> PvsSchema:
+        return IDENTITY_SCHEMA
+
+    @classmethod
+    def get_identity(cls, state: Any) -> dict[str, Any] | None:
+        return None
+
+
 def _request(current_identity: pb.ResourceIdentityData | None = None) -> pb.ReadResource.Request:
     state = marshal({"path": "/tmp/x"}, schema=_Base.get_schema().block)
     request = pb.ReadResource.Request(type_name="demo", current_state=state)
@@ -90,6 +105,17 @@ async def test_emits_derived_identity_when_declared() -> None:
 
     assert not response.diagnostics
     assert unmarshal_identity(response.new_identity, IDENTITY_SCHEMA) == {"path": "/tmp/x"}
+
+
+@pytest.mark.asyncio
+async def test_omits_identity_when_derivation_returns_none() -> None:
+    """A resource may declare an identity schema yet get_identity() return None. Identity is
+    never marshalled partially -- None means emit nothing, and this must not be an error."""
+    with _patched(IdentityResourceReturningNone):
+        response = await _read_resource_impl(_request(), context=None)
+
+    assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
+    assert not response.HasField("new_identity")
 
 
 @pytest.mark.asyncio

@@ -93,3 +93,6 @@ def test_preserves_attribute_order() -> None:
     proto = pvs_identity_schema_to_proto(schema)
 
     assert [a.name for a in proto.identity_attributes] == ["region", "name"]
+
+
+# 🐍🏗️🔚
