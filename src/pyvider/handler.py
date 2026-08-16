@@ -38,6 +38,7 @@ class ProviderHandler(ProviderServicer):
             GetFunctionsHandler,
             GetMetadataHandler,
             GetProviderSchemaHandler,
+            GetResourceIdentitySchemasHandler,
             ImportResourceStateHandler,
             MoveResourceStateHandler,
             OpenEphemeralResourceHandler,
@@ -59,6 +60,7 @@ class ProviderHandler(ProviderServicer):
             "StartStream": self.StartStream,
             "GetMetadata": GetMetadataHandler,
             "GetProviderSchema": GetProviderSchemaHandler,
+            "GetResourceIdentitySchemas": GetResourceIdentitySchemasHandler,
             "ConfigureProvider": ConfigureProviderHandler,
             "ValidateProviderConfig": ValidateProviderConfigHandler,
             "StopProvider": StopProviderHandler,
@@ -181,6 +183,9 @@ class ProviderHandler(ProviderServicer):
 
     async def GetProviderSchema(self, request: Any, context: Any) -> Any:
         return await self._delegate("GetProviderSchema", request, context)
+
+    async def GetResourceIdentitySchemas(self, request: Any, context: Any) -> Any:
+        return await self._delegate("GetResourceIdentitySchemas", request, context)
 
     async def ConfigureProvider(self, request: Any, context: Any) -> Any:
         return await self._delegate("ConfigureProvider", request, context)

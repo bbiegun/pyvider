@@ -11,6 +11,9 @@ from pyvider.protocols.tfprotov6.handlers.configure_provider import ConfigurePro
 from pyvider.protocols.tfprotov6.handlers.get_functions import GetFunctionsHandler
 from pyvider.protocols.tfprotov6.handlers.get_metadata import GetMetadataHandler
 from pyvider.protocols.tfprotov6.handlers.get_provider_schema import GetProviderSchemaHandler
+from pyvider.protocols.tfprotov6.handlers.get_resource_identity_schemas import (
+    GetResourceIdentitySchemasHandler,
+)
 from pyvider.protocols.tfprotov6.handlers.import_resource_state import ImportResourceStateHandler
 from pyvider.protocols.tfprotov6.handlers.move_resource_state import MoveResourceStateHandler
 from pyvider.protocols.tfprotov6.handlers.open_ephemeral_resource import OpenEphemeralResourceHandler
@@ -37,6 +40,7 @@ __all__ = [
     "GetFunctionsHandler",
     "GetMetadataHandler",
     "GetProviderSchemaHandler",
+    "GetResourceIdentitySchemasHandler",
     "ImportResourceStateHandler",
     "MoveResourceStateHandler",
     "OpenEphemeralResourceHandler",
