@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Protocol is tfplugin6 **6.11**. Generated stubs are committed; never hand-edit `*_pb2*`. Regenerate with `python scripts/regen_protobuf.py`.
-- Identity schema versions **start at 1 and increment**. `PvsSchema.version` validates `> 0`, so version 0 is rejected. Terraform compares identity versions only for equality, so the starting number is a provider-internal convention.
+- Identity schema versions **start at 1 and increment**. Terraform compares identity versions only for equality, so the starting number is a provider-internal convention. Task 1 repairs `PvsSchema.version`'s validator to enforce this — see that task for why the repair is in scope.
 - Identity attributes must be **flat scalars** — `CtyString`, `CtyNumber`, `CtyBool` only. No nested blocks, no collections.
 - Identity attributes must not set `computed` or `sensitive`. `PvsObjectType.to_cty_type()` folds `computed` into the optional set, which would silently alter the identity object type.
 - `ImportResourceState` is **out of scope** — it is a stub today. This plan adds the inbound plumbing (`ResourceContext.identity`) that import will later consume, but does not implement import.
@@ -24,9 +24,10 @@
 
 ---
 
-### Task 1: `s_identity()` schema factory
+### Task 1: `s_identity()` schema factory (and the version validator it depends on)
 
 **Files:**
+- Modify: `src/pyvider/schema/types/schema.py:29` (repair the `version` validator)
 - Modify: `src/pyvider/schema/factory.py` (add after `s_provider`, ~line 171)
 - Modify: `src/pyvider/schema/__init__.py` (import + `__all__`)
 - Test: `tests/schema/test_identity_factory.py`
@@ -34,6 +35,18 @@
 **Interfaces:**
 - Consumes: existing `_create_schema(version, attributes, block_types)` and `PvsAttribute`.
 - Produces: `s_identity(attributes: dict[str, PvsAttribute] | None = None, version: int = 1) -> PvsSchema`, exported from `pyvider.schema`.
+
+**Why the validator repair is in scope:** `PvsSchema.version` currently reads
+`field(validator=lambda i, a, v: v > 0)`. That lambda *returns* a bool, and attrs
+discards validator return values — failure is signalled by raising. So the
+validator has never enforced anything; `PvsSchema(version=0)` constructs fine.
+`s_identity` is the **first** factory to accept a `version` argument at all — every
+existing `s_*` hardcodes `_create_schema(1, ...)` and exposes no parameter — so this
+task is the first code that can reach a bad version, and it depends on the check
+working. Verified before scoping this in: no code in pyvider, pyvider-components,
+tofusoup, terraform-provider-pyvider, or plating constructs `PvsSchema` directly, and
+no caller anywhere passes a custom version. Repairing the validator therefore changes
+no existing behaviour.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -49,6 +62,8 @@ import pytest
 
 from pyvider.cty import CtyString
 from pyvider.schema import PvsSchema, a_str, s_identity
+from pyvider.schema.exceptions import PvsSchemaDefinitionError
+from pyvider.schema.types import PvsObjectType
 
 
 def test_s_identity_builds_a_pvs_schema() -> None:
@@ -78,10 +93,29 @@ def test_s_identity_has_no_nested_blocks() -> None:
     assert schema.block.block_types == ()
 
 
-def test_s_identity_rejects_version_zero() -> None:
-    """Identity versions start at 1; PvsSchema.version validates > 0."""
-    with pytest.raises(ValueError):
+def test_s_identity_rejects_version_below_one() -> None:
+    """Identity versions start at 1."""
+    with pytest.raises(PvsSchemaDefinitionError, match="version"):
         s_identity(attributes={"path": a_str(required=True)}, version=0)
+
+
+def test_s_identity_rejects_negative_version() -> None:
+    with pytest.raises(PvsSchemaDefinitionError, match="version"):
+        s_identity(attributes={"path": a_str(required=True)}, version=-1)
+
+
+def test_pvs_schema_version_validator_actually_raises() -> None:
+    """Regression: the validator used to return a bool, which attrs discards.
+
+    s_identity is the first factory to accept a version argument, so it is the
+    first code that can reach a bad value.
+    """
+    with pytest.raises(PvsSchemaDefinitionError, match="version"):
+        PvsSchema(version=0, block=PvsObjectType(attributes={}))
+
+
+def test_pvs_schema_accepts_version_one() -> None:
+    assert PvsSchema(version=1, block=PvsObjectType(attributes={})).version == 1
 
 
 def test_unflagged_identity_attribute_defaults_to_optional() -> None:
@@ -105,7 +139,35 @@ def test_required_wins_when_both_flags_set() -> None:
 Run: `uv run pytest tests/schema/test_identity_factory.py -v`
 Expected: FAIL — `ImportError: cannot import name 's_identity' from 'pyvider.schema'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3a: Repair the version validator**
+
+In `src/pyvider/schema/types/schema.py`, add the import and a real validator, then use it. The current line 29 is `version: int = field(validator=lambda i, a, v: v > 0)`.
+
+```python
+from pyvider.schema.exceptions import PvsSchemaDefinitionError
+
+
+def _validate_version(instance: object, attribute: object, value: int) -> None:
+    """Reject schema versions below 1.
+
+    Replaces a lambda that returned a bool. attrs signals validation failure by
+    raising and discards return values, so the original enforced nothing.
+    """
+    if value < 1:
+        raise PvsSchemaDefinitionError(
+            f"Schema version must be 1 or greater, got {value}."
+        )
+```
+
+Then change the field to:
+
+```python
+    version: int = field(validator=_validate_version)
+```
+
+`pyvider/schema/exceptions.py` imports nothing, so this introduces no import cycle.
+
+- [ ] **Step 3b: Write the factory**
 
 In `src/pyvider/schema/factory.py`, after `s_provider`:
 
@@ -121,24 +183,34 @@ def s_identity(
     `optional` becomes `optional_for_import` -- the same collapse Terraform
     core performs in ProtoToIdentitySchema.
 
+    Identity versions start at 1 and increment by 1 on each change; the floor is
+    enforced by PvsSchema.version.
+
     Identity attributes must be flat scalars and must not set computed or
     sensitive; both are enforced in pvs_identity_schema_to_proto.
     """
     return _create_schema(version, attributes=attributes)
 ```
 
+No import change is needed in `factory.py` — the version check lives on `PvsSchema`.
+
 In `src/pyvider/schema/__init__.py`, add `s_identity` to the `from pyvider.schema.factory import (...)` block and to `__all__`, keeping both alphabetically sorted (`s_function`, `s_identity`, `s_provider`, `s_resource`).
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/schema/test_identity_factory.py -v`
-Expected: PASS — 7 passed
+Expected: PASS — 11 passed
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Verify the validator repair broke nothing**
+
+Run: `uv run pytest -q`
+Expected: PASS, with no drop in the pre-existing count. Every existing `s_*` factory hardcodes version 1, so the now-live validator has nothing to reject. If any existing test fails here, report it as a concern rather than weakening the validator — it means something really was constructing an invalid schema.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/pyvider/schema/factory.py src/pyvider/schema/__init__.py tests/schema/test_identity_factory.py
-git commit -m "feat(schema): add s_identity factory for resource identity schemas"
+git add src/pyvider/schema/types/schema.py src/pyvider/schema/factory.py src/pyvider/schema/__init__.py tests/schema/test_identity_factory.py
+git commit -m "feat(schema): add s_identity factory and repair the version validator"
 ```
 
 ---
