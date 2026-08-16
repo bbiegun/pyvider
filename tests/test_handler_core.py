@@ -25,6 +25,8 @@ def test_post_init(mock_provider: MagicMock) -> None:
 
     assert "GetProviderSchema" in handler._handlers
 
+    assert "GetResourceIdentitySchemas" in handler._handlers
+
     assert "ConfigureProvider" in handler._handlers
 
     assert "ValidateProviderConfig" in handler._handlers
@@ -258,6 +260,27 @@ async def test_get_provider_schema_delegates(mock_provider: MagicMock) -> None:
     mock_delegate.assert_awaited_once_with("GetProviderSchema", request, context)
 
     assert result == "schema_response"
+
+
+@pytest.mark.asyncio
+async def test_get_resource_identity_schemas_delegates(mock_provider: MagicMock) -> None:
+    """Test GetResourceIdentitySchemas delegates to handler."""
+
+    handler = ProviderHandler(provider=mock_provider)
+
+    mock_delegate = AsyncMock(return_value="identity_schemas_response")
+
+    handler._delegate = mock_delegate
+
+    request = MagicMock()
+
+    context = MagicMock()
+
+    result = await handler.GetResourceIdentitySchemas(request, context)
+
+    mock_delegate.assert_awaited_once_with("GetResourceIdentitySchemas", request, context)
+
+    assert result == "identity_schemas_response"
 
 
 @pytest.mark.asyncio
