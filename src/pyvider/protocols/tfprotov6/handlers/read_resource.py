@@ -10,7 +10,7 @@ import msgpack  # type: ignore[import-untyped]
 from provide.foundation import logger
 
 from pyvider.common.encryption import decrypt
-from pyvider.conversion import marshal, unmarshal
+from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_identity
 from pyvider.exceptions import PyviderError, ResourceError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
@@ -28,6 +28,20 @@ from pyvider.resources.context import ResourceContext
 async def ReadResourceHandler(request: pb.ReadResource.Request, context: Any) -> pb.ReadResource.Response:
     """Handle read resource request."""
     return await _read_resource_impl(request, context)
+
+
+def _set_new_identity(
+    response: pb.ReadResource.Response,
+    resource_class: Any,
+    identity_schema: Any,
+    new_state_attrs: Any,
+) -> None:
+    """Attach derived identity to the response, only when fully determinable."""
+    if identity_schema is None:
+        return
+    identity_values = resource_class.get_identity(new_state_attrs)
+    if identity_values is not None:
+        response.new_identity.CopyFrom(marshal_identity(identity_values, identity_schema))
 
 
 async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) -> pb.ReadResource.Response:
@@ -92,6 +106,7 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
         )
 
         resource_schema = resource_class.get_schema()
+        identity_schema = resource_class.get_identity_schema()
         prior_state_cty = unmarshal(request.current_state, schema=resource_schema.block)
         prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
 
@@ -158,6 +173,11 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
             private_state=private_state_instance,
             capabilities=provider_instance.metadata.capabilities,  # type: ignore[arg-type]
             test_mode_enabled=test_mode_enabled,
+            identity=(
+                unmarshal_identity(request.current_identity, identity_schema)
+                if identity_schema is not None
+                else None
+            ),
         )
         new_state_attrs = await resource_handler.read(resource_context)
 
@@ -167,6 +187,7 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
             new_state_cty = validator_type.validate(raw_state_dict)
             marshalled_new_state = marshal(new_state_cty, schema=resource_schema.block)
             response.new_state.msgpack = marshalled_new_state.msgpack
+            _set_new_identity(response, resource_class, identity_schema, new_state_attrs)
 
             logger.info(
                 "Resource read completed successfully with new state",
