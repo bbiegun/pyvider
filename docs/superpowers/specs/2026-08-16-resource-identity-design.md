@@ -46,7 +46,7 @@ resources are therefore phase 2 of this work, not a separate feature.
 
 **In scope**
 
-- `s_identity()` / `i_*()` factories over the existing `PvsSchema` types
+- An `s_identity()` factory over the existing `PvsSchema` / `PvsAttribute` types
 - Opt-in `get_identity_schema()` on `BaseResource`, with value derivation
 - `GetResourceIdentitySchemas` and `UpgradeResourceIdentity` handlers
 - Identity threaded through `ReadResource`, `PlanResourceChange`,
@@ -106,8 +106,10 @@ What reuse gives up, and how each is handled:
   equality. Rejected at conversion time (see below) rather than made
   unrepresentable.
 - **`computed`, `sensitive`, `default`, and `object_type` are meaningless on an
-  identity attribute.** Prevented by the builder surface — the `i_*` factories
-  do not accept them.
+  identity attribute.** Rejected at conversion time alongside the shape checks.
+  `computed` is the one that would otherwise do something: `to_cty_type()` folds
+  it into the optional set, so a stray `computed=True` would silently alter the
+  identity object type.
 - **`version` validates `> 0`, while the proto says identity versioning
   "implicitly starts at 0".** Identity versions default to 1 and increment from
   there. Terraform only compares identity versions for equality when deciding
@@ -116,31 +118,32 @@ What reuse gives up, and how each is handled:
 
 ### Factory helpers
 
-`src/pyvider/schema/factory.py` gains `s_identity()` plus `i_str()`, `i_num()`,
-and `i_bool()`, exported from `pyvider.schema`. `s_identity` returns a
-`PvsSchema`; the `i_*` builders return `PvsAttribute`:
+`src/pyvider/schema/factory.py` gains exactly one function, `s_identity()`,
+exported from `pyvider.schema`. Identity attributes are built with the existing
+`a_str` / `a_num` / `a_bool`:
 
 ```python
 @classmethod
 def get_identity_schema(cls) -> PvsSchema:
     return s_identity(
         version=1,
-        attributes={"path": i_str(required_for_import=True)},
+        attributes={"path": a_str(required=True)},
     )
 ```
 
-The builders exist for two reasons beyond convenience. They keep protocol
-vocabulary at the call site — `required_for_import=True` rather than a bare
-`required=True` that means something subtly different here — and, by offering no
-`i_list` / `i_obj` / `i_dyn`, they make flat scalar identity the only shape
-reachable from the public API.
+`required` here reads as `required_for_import`, and that is not a reinterpretation
+pyvider invents — Terraform core performs the same collapse. `ProtoToIdentitySchema`
+maps `RequiredForImport` onto `configschema.Attribute.Required` and
+`OptionalForImport` onto `.Optional`, reusing the identical attribute struct it
+uses for ordinary config attributes (`internal/plugin6/convert/schema.go:162`).
+The two names exist only as wire fields; nothing downstream of decoding keeps
+them apart.
 
-```python
-def i_str(description: str = "", *, required_for_import: bool = False,
-          optional_for_import: bool = False) -> PvsAttribute:
-    return a_str(description, required=required_for_import,
-                 optional=optional_for_import)
-```
+No `i_*` wrapper builders. They would only move the flat-scalar constraint from
+conversion time to authoring time, and conversion has to enforce it regardless
+to catch hand-built `PvsAttribute`s — so the wrappers would buy error locality
+on a handful of lines written once per resource, at the cost of a parallel
+factory surface to keep in step with `a_*`.
 
 ### Resource API
 
@@ -189,11 +192,12 @@ resource-specific.
 `src/pyvider/conversion/schema_adapter.py` gains
 `pvs_identity_schema_to_proto()`, reusing the existing cached
 `_encode_cty_type_bytes()` for attribute types. Because identity reuses
-`PvsSchema`, this is where the shape constraints are enforced — it raises when
-the schema declares `block_types`, or when any attribute's type is not a scalar
-(`CtyString` / `CtyNumber` / `CtyBool`). Those states are unreachable through the
-`i_*` builders but representable by hand-constructing `PvsAttribute`, so the
-conversion boundary is the honest place to reject them.
+`PvsSchema`, this is the single place the identity-specific constraints are
+enforced. It raises when the schema declares `block_types`, when any attribute's
+type is not a scalar (`CtyString` / `CtyNumber` / `CtyBool`), or when an
+attribute sets `computed` or `sensitive`. Identity must be "wholly
+representative of all data necessary to compare two managed resource instances"
+and is compared by equality, so none of those shapes are valid.
 
 The flag mapping happens here too: `required` becomes `required_for_import` and
 `optional` becomes `optional_for_import`.
@@ -286,14 +290,14 @@ Identity-specific cases:
 TDD, per project convention. Test files stay under the 500-line cap, so this
 splits across several files rather than one per subsystem.
 
-- **Factories** — `s_identity` returns a `PvsSchema` and `i_*` return
-  `PvsAttribute`; `required_for_import` lands on `required`,
-  `optional_for_import` on `optional`; an unflagged identity attribute inherits
-  the existing default of `optional`, and setting both flags resolves to
-  required, both via `PvsAttribute.__attrs_post_init__` rather than new code.
-- **Conversion** — `pvs_identity_schema_to_proto` flag and field mapping;
-  rejection of a hand-built identity schema carrying `block_types` or a
-  non-scalar attribute type; identity value round-trip through
+- **Factory** — `s_identity` returns a `PvsSchema` wrapping a `PvsObjectType`,
+  with the version applied; an unflagged identity attribute inherits the
+  existing default of `optional`, and setting both flags resolves to required,
+  both via `PvsAttribute.__attrs_post_init__` rather than new code.
+- **Conversion** — `pvs_identity_schema_to_proto` maps `required` to
+  `required_for_import` and `optional` to `optional_for_import`; rejects an
+  identity schema carrying `block_types`, a non-scalar attribute type, or
+  `computed` / `sensitive`; identity value round-trip through
   `marshal_identity` / `unmarshal_identity`, including null and absent.
 - **Derivation** — default `get_identity` against a state object; missing
   attribute, unknown value, and `None` state all yield `None`; override is
