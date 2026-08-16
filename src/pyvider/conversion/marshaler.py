@@ -100,29 +100,90 @@ def _apply_schema_marks_iterative(root_value: CtyValue, root_schema: PvsType | C
     return results.get(id(root_value), root_value)
 
 
+_SEQUENCE_PAYLOADS = (list, tuple, set, frozenset)
+_CONTAINER_PAYLOADS = (dict, *_SEQUENCE_PAYLOADS)
+
+
+def _children_to_unmark(node: Any) -> list[Any]:
+    """The nested values `node` holds, or an empty list if it holds none.
+
+    Raw Python containers are walked as well as CtyValues. `validate` is
+    routinely handed a plain list or dict whose elements are already-validated
+    values, and those elements can be marked -- an earlier version stopped at
+    the first non-CtyValue and left their marks in place.
+    """
+    payload = node.value if isinstance(node, CtyValue) else node
+    if isinstance(payload, dict):
+        return list(payload.values())
+    if isinstance(payload, _SEQUENCE_PAYLOADS):
+        return list(payload)
+    if isinstance(payload, CtyValue):
+        return [payload]
+    return []
+
+
+def _rebuild_unmarked(node: Any, done: dict[int, Any]) -> Any:
+    """Reassemble `node` from its already-unmarked children."""
+    payload = node.value if isinstance(node, CtyValue) else node
+
+    if isinstance(payload, dict):
+        rebuilt: Any = {k: done.get(id(v), v) for k, v in payload.items()}
+    elif isinstance(payload, _SEQUENCE_PAYLOADS):
+        rebuilt = type(payload)(done.get(id(v), v) for v in payload)
+    elif isinstance(payload, CtyValue):
+        rebuilt = done.get(id(payload), payload)
+    else:
+        rebuilt = payload
+
+    if not isinstance(node, CtyValue):
+        return rebuilt
+    if rebuilt is payload:
+        return attrs.evolve(node, marks=frozenset()) if node.marks else node
+    return attrs.evolve(node, value=rebuilt, marks=frozenset())
+
+
 def _unmark_deep(value: Any) -> Any:
     """A copy of `value` with every mark removed, at any depth.
 
-    Iterative for the same reason `_apply_schema_marks_iterative` is: a deeply
-    nested state value must not blow the Python stack on the way to the wire.
+    Iterative, like `_apply_schema_marks_iterative` and for the same reason: a
+    deeply nested state value must not blow the Python stack on its way to the
+    wire. An earlier version of this said it was iterative while being plainly
+    recursive, and did raise RecursionError at a nesting depth pyvider-cty
+    advertises as supported, once a realistic handler stack was underneath it.
 
     Deliberately local rather than `pyvider.cty.marks.unmark_deep`, which only
     exists from pyvider-cty 0.5. Keeping it here means this module behaves the
     same against 0.4 and 0.5, so the two repositories can be released in either
     order.
     """
-    if not isinstance(value, CtyValue):
-        return value
-    inner = value.value
-    if isinstance(inner, dict):
-        rebuilt: Any = {k: _unmark_deep(v) for k, v in inner.items()}
-    elif isinstance(inner, list | tuple | frozenset | set):
-        rebuilt = type(inner)(_unmark_deep(v) for v in inner)
-    elif isinstance(inner, CtyValue):
-        rebuilt = _unmark_deep(inner)
-    else:
-        return attrs.evolve(value, marks=frozenset()) if value.marks else value
-    return attrs.evolve(value, value=rebuilt, marks=frozenset())
+    post_process = object()
+    done: dict[int, Any] = {}
+    processing: set[int] = set()
+    stack: list[Any] = [value]
+
+    while stack:
+        node = stack.pop()
+
+        if node is post_process:
+            original = stack.pop()
+            processing.discard(id(original))
+            done[id(original)] = _rebuild_unmarked(original, done)
+            continue
+
+        node_id = id(node)
+        if node_id in done or node_id in processing:
+            continue
+
+        children = _children_to_unmark(node)
+        if not children:
+            done[node_id] = _rebuild_unmarked(node, done)
+            continue
+
+        processing.add(node_id)
+        stack.extend([node, post_process])
+        stack.extend(children)
+
+    return done.get(id(value), value)
 
 
 def marshal(value: CtyValue | Any, *, schema: PvsType | CtyType) -> pb.DynamicValue:
