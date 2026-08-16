@@ -12,7 +12,7 @@ from provide.foundation import logger
 
 from pyvider.common.encryption import decrypt, encrypt
 from pyvider.common.operation_context import OperationContext, operation_context
-from pyvider.conversion import marshal, unmarshal
+from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_identity
 from pyvider.conversion.marshaler import _apply_schema_marks_iterative
 from pyvider.cty import CtyObject, CtyValue
 from pyvider.cty.exceptions import CtyValidationError
@@ -26,6 +26,7 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
+from pyvider.schema import PvsSchema
 
 
 async def _get_resource_and_provider_instances(type_name: str) -> tuple[Any, Any]:
@@ -136,6 +137,7 @@ def _create_resource_context(
     private_state_instance: Any,
     resource_class: Any,
     provider_instance: Any,
+    prior_identity: pb.ResourceIdentityData | None = None,
 ) -> ResourceContext:
     # Try to create attrs instances, but they may return None if values are unknown/computed
     config_instance = cty_to_attrs_instance(config_cty_marked, resource_class.config_class)
@@ -144,6 +146,8 @@ def _create_resource_context(
 
     provider_context = hub.get_component("singleton", "provider_context")
     test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
+
+    identity_schema = resource_class.get_identity_schema()
 
     return ResourceContext(
         config=config_instance,
@@ -154,6 +158,9 @@ def _create_resource_context(
         planned_state_cty=proposed_new_state_cty,
         capabilities=provider_instance.metadata.capabilities,
         test_mode_enabled=test_mode_enabled,
+        identity=(
+            unmarshal_identity(prior_identity, identity_schema) if identity_schema is not None else None
+        ),
     )
 
 
@@ -161,6 +168,9 @@ def _handle_planned_state_dict(
     planned_state_dict: dict[str, Any],
     resource_schema: Any,
     response: pb.PlanResourceChange.Response,
+    *,
+    identity_schema: PvsSchema | None = None,
+    identity_values: dict[str, Any] | None = None,
 ) -> None:
     logger.debug("_handle_planned_state_dict received", keys=list(planned_state_dict.keys()))
     logger.debug("Planned state dict values", planned_state_dict=planned_state_dict)
@@ -197,6 +207,42 @@ def _handle_planned_state_dict(
     planned_state_cty_final = validator_type.validate(raw_values_for_validation)
     marshalled_planned_state = marshal(planned_state_cty_final, schema=resource_schema.block)
     response.planned_state.msgpack = marshalled_planned_state.msgpack
+
+    if identity_schema is not None and identity_values is not None:
+        response.planned_identity.CopyFrom(marshal_identity(identity_values, identity_schema))
+
+
+def _derive_planned_identity_values(
+    resource_class: Any,
+    resource_schema: Any,
+    identity_schema: PvsSchema,
+    planned_state_dict: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Derive identity from the planned state, when fully determinable.
+
+    During plan, the planned state may legitimately contain unknown values --
+    an identity attribute depending on one is not knowable until apply. That
+    makes validation of the planned state, and therefore identity derivation,
+    something that can fail in the ordinary course of planning. An unknowable
+    identity must never become an error diagnostic, so any failure here just
+    means "not yet" and falls back to omitting identity.
+    """
+    try:
+        identity_values: dict[str, Any] | None = resource_class.get_identity(
+            cty_to_attrs_instance(
+                resource_schema.block.to_cty_type().validate(planned_state_dict),
+                resource_class.state_class,
+            )
+        )
+        return identity_values
+    except Exception as e:
+        logger.debug(
+            "Could not derive planned identity from planned state",
+            operation="plan_resource_change",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        return None
 
 
 @rpc_handler("PlanResourceChange")
@@ -245,6 +291,7 @@ async def _plan_resource_change_impl(
             private_state_instance,
             resource_class,
             provider_instance,
+            request.prior_identity,
         )
 
         logger.debug(
@@ -269,7 +316,21 @@ async def _plan_resource_change_impl(
                 return response
 
         if planned_state_dict:
-            _handle_planned_state_dict(planned_state_dict, resource_schema, response)
+            identity_schema = resource_class.get_identity_schema()
+            identity_values = (
+                _derive_planned_identity_values(
+                    resource_class, resource_schema, identity_schema, planned_state_dict
+                )
+                if identity_schema is not None
+                else None
+            )
+            _handle_planned_state_dict(
+                planned_state_dict,
+                resource_schema,
+                response,
+                identity_schema=identity_schema,
+                identity_values=identity_values,
+            )
 
         if planned_private_state_attrs:
             serialized_private_bytes = msgpack.packb(
