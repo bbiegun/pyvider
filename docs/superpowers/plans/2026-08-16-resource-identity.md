@@ -199,7 +199,7 @@ In `src/pyvider/schema/__init__.py`, add `s_identity` to the `from pyvider.schem
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/schema/test_identity_factory.py -v`
-Expected: PASS — 11 passed
+Expected: PASS — 10 passed
 
 - [ ] **Step 5: Verify the validator repair broke nothing**
 
