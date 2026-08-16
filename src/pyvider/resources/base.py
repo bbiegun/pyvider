@@ -63,6 +63,52 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
     def get_schema(cls) -> PvsSchema: ...
 
     @classmethod
+    def get_identity_schema(cls) -> PvsSchema | None:
+        """Opt in to resource identity.
+
+        Returning None means this resource has no identity, which is the
+        default. Terraform treats identity as optional for managed resources;
+        it is only mandatory for list resources.
+        """
+        return None
+
+    @classmethod
+    def get_identity(cls, state: Any) -> dict[str, Any] | None:
+        """Derive identity values from state by attribute name.
+
+        Identity attributes are almost always a subset of state, so this
+        default means a resource gains identity by declaring
+        get_identity_schema() and nothing else. Override when identity is not
+        derivable from state.
+
+        Returns None when identity cannot be fully determined -- no schema, no
+        state, or any attribute missing, null, or still unknown during plan.
+        """
+        schema = cls.get_identity_schema()
+        if schema is None or state is None:
+            return None
+
+        values: dict[str, Any] = {}
+        for name in schema.block.attributes:
+            value = getattr(state, name, None)
+            if value is None:
+                return None
+            if isinstance(value, CtyValue) and (value.is_unknown or value.is_null):
+                return None
+            values[name] = value
+
+        return values
+
+    @classmethod
+    async def upgrade_identity(cls, version: int, raw_identity: dict[str, Any]) -> dict[str, Any]:
+        """Upgrade identity data written under an older identity version.
+
+        Only called when the stored version differs from the schema's current
+        version. The default passes data through unchanged.
+        """
+        return raw_identity
+
+    @classmethod
     def from_cty(cls, cty_value: CtyValue | None, target_cls: type) -> Any | None:
         if cty_value is None:
             return None
