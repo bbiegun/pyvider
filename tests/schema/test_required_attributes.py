@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from pyvider.cty import CtyString, CtyValue
+from pyvider.cty import CtyList, CtyNumber, CtyObject, CtyString, CtyValue
 from pyvider.cty.exceptions import CtyAttributeValidationError
 from pyvider.schema import (
     PvsSchema,
@@ -168,8 +168,22 @@ class TestCtyValuePayloads:
         assert _path_of(caught.value) == "name"
 
     def test_a_cty_object_payload_is_walked(self) -> None:
+        """The payload is built directly rather than through `validate`.
+
+        Routing it through `block.to_cty_type().validate({"rule": [{"port":
+        None}]})` reads better and is wrong: a cty that accepts a null for a
+        non-optional attribute is exactly the paired change this check exists to
+        make safe, so the fixture would only build against an unreleased cty and
+        the test would fail on every installed one. What is under test is the
+        walk, not cty's constructor, so the shape is assembled here.
+        """
         schema = s_resource(block_types=[b_list("rule", attributes={"port": a_num(required=True)})])
-        config = schema.block.to_cty_type().validate({"rule": [{"port": None}]})
+        element = CtyValue(
+            vtype=CtyObject(attribute_types={"port": CtyNumber()}),
+            value={"port": CtyValue.null(CtyNumber())},
+        )
+        rules = CtyValue(vtype=CtyList(element_type=element.type), value=(element,))
+        config = CtyValue(vtype=CtyObject(attribute_types={"rule": rules.type}), value={"rule": rules})
 
         with pytest.raises(CtyAttributeValidationError) as caught:
             check_required_attributes(schema.block, config)
