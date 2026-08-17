@@ -31,6 +31,13 @@ def _resource_without_identity() -> MagicMock:
     return cls
 
 
+class DuckTypedResource:
+    """A resource registered by marker attribute alone, with no BaseResource in sight and
+    therefore no get_identity_schema(). @register_resource stamps markers and discovery
+    registers on the marker, so this shape is registrable and predates identity entirely --
+    it must not produce a warning diagnostic."""
+
+
 @pytest.mark.asyncio
 async def test_includes_only_resources_declaring_identity() -> None:
     components = {
@@ -88,6 +95,20 @@ async def test_conversion_failure_degrades_to_a_warning() -> None:
     assert len(response.diagnostics) == 1
     assert response.diagnostics[0].severity == pb.Diagnostic.WARNING
     assert "broken" in response.diagnostics[0].summary
+
+
+@pytest.mark.asyncio
+async def test_duck_typed_resource_without_get_identity_schema_produces_no_diagnostics() -> None:
+    """A registered resource that never inherited BaseResource has no
+    get_identity_schema(). A missing method means the same as one returning None --
+    it must be omitted from identity_schemas without raising a warning diagnostic."""
+    with patch(f"{MODULE}.get_all_components", return_value={"duck": DuckTypedResource}):
+        response = await GetResourceIdentitySchemasHandler(
+            pb.GetResourceIdentitySchemas.Request(), context=None
+        )
+
+    assert "duck" not in response.identity_schemas
+    assert not response.diagnostics
 
 
 # 🐍🏗️🔚

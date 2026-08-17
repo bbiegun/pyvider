@@ -10,7 +10,10 @@ from provide.foundation import logger
 
 from pyvider.conversion import pvs_identity_schema_to_proto
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
-from pyvider.protocols.tfprotov6.handlers.utils import get_all_components
+from pyvider.protocols.tfprotov6.handlers.utils import (
+    get_all_components,
+    resolve_identity_schema,
+)
 import pyvider.protocols.tfprotov6.protobuf as pb
 
 
@@ -28,14 +31,18 @@ async def _get_resource_identity_schemas_impl(
     """Collect identity schemas for every resource that declares one.
 
     Identity is opt-in: a resource whose get_identity_schema() returns None is
-    simply absent from the map, which is what Terraform expects.
+    simply absent from the map, which is what Terraform expects. A resource
+    registered without get_identity_schema() at all (duck-typed, predating
+    identity) means the same thing -- resolve_identity_schema() treats the
+    missing method as "no identity" rather than letting the try/except below
+    turn it into a spurious warning.
     """
     identity_schemas: dict[str, pb.ResourceIdentitySchema] = {}
     diagnostics: list[pb.Diagnostic] = []
 
     for name, resource_class in get_all_components("resource").items():
         try:
-            schema = resource_class.get_identity_schema()
+            schema = resolve_identity_schema(resource_class)
             if schema is None:
                 continue
             identity_schemas[name] = pvs_identity_schema_to_proto(schema)
