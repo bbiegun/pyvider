@@ -72,6 +72,37 @@ class IdentityResourceReturningNone(_Base):
         return None
 
 
+class IdentityResourceRaisingOnDerive(_Base):
+    """A resource whose get_identity() override is buggy. The read must still succeed with
+    identity omitted -- the same outcome plan and apply produce for the identical bug."""
+
+    seen_identity: Any = None
+
+    @classmethod
+    def get_identity_schema(cls) -> PvsSchema:
+        return IDENTITY_SCHEMA
+
+    @classmethod
+    def get_identity(cls, state: Any) -> dict[str, Any] | None:
+        raise RuntimeError("boom: buggy get_identity() override")
+
+
+class DuckTypedResource:
+    """A resource registered by marker attribute alone, with no BaseResource in sight and
+    therefore no get_identity_schema(). @register_resource stamps markers and discovery
+    registers on the marker, so this shape is registrable and predates identity entirely --
+    it must not start dying with an AttributeError."""
+
+    state_class = DemoState
+
+    @classmethod
+    def get_schema(cls) -> PvsSchema:
+        return s_resource({"path": a_str(required=True)})
+
+    async def read(self, ctx: ResourceContext) -> DemoState | None:
+        return DemoState(path="/tmp/x")
+
+
 def _request(current_identity: pb.ResourceIdentityData | None = None) -> pb.ReadResource.Request:
     state = marshal({"path": "/tmp/x"}, schema=_Base.get_schema().block)
     request = pb.ReadResource.Request(type_name="demo", current_state=state)
@@ -126,6 +157,32 @@ async def test_inbound_identity_reaches_the_resource_context() -> None:
         await _read_resource_impl(_request(current_identity=inbound), context=None)
 
     assert IdentityResource.seen_identity == {"path": "/prior"}
+
+
+@pytest.mark.asyncio
+async def test_omits_identity_when_derivation_raises() -> None:
+    """One buggy get_identity() override must not produce three different outcomes. Apply
+    and plan both swallow the exception, log a WARNING and omit; read used to have no
+    try/except at all, so the same bug turned the next refresh into an "Internal Provider
+    Error" after apply had already written state."""
+    with _patched(IdentityResourceRaisingOnDerive):
+        response = await _read_resource_impl(_request(), context=None)
+
+    assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
+    assert not response.HasField("new_identity")
+    assert response.new_state.msgpack
+
+
+@pytest.mark.asyncio
+async def test_duck_typed_resource_without_get_identity_schema_still_reads() -> None:
+    """A registered resource that never inherited BaseResource has no
+    get_identity_schema(). A missing method means the same as one returning None."""
+    with _patched(DuckTypedResource):
+        response = await _read_resource_impl(_request(), context=None)
+
+    assert not response.diagnostics
+    assert not response.HasField("new_identity")
+    assert response.new_state.msgpack
 
 
 # 🐍🏗️🔚

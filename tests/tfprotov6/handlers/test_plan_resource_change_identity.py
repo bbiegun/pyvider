@@ -145,6 +145,22 @@ class IdentityResourceRaisingOnDerive(_Base):
         raise RuntimeError("boom: buggy get_identity() override")
 
 
+class DuckTypedResource:
+    """Registered by marker attribute alone, with no BaseResource and therefore no
+    get_identity_schema(). @register_resource stamps markers and discovery registers on the
+    marker, so this shape predates identity and must not start raising AttributeError."""
+
+    config_class = DemoConfig
+    state_class = DemoState
+
+    @classmethod
+    def get_schema(cls) -> PvsSchema:
+        return RESOURCE_SCHEMA
+
+    async def plan(self, ctx: ResourceContext) -> tuple[dict[str, Any], None]:
+        return {"path": "/tmp/x"}, None
+
+
 def _request(prior_identity: pb.ResourceIdentityData | None = None) -> pb.PlanResourceChange.Request:
     config = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
     proposed_new_state = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
@@ -218,6 +234,17 @@ async def test_impl_omits_planned_identity_when_derivation_raises() -> None:
 
     assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
     assert not response.HasField("planned_identity")
+
+
+@pytest.mark.asyncio
+async def test_impl_duck_typed_resource_without_get_identity_schema_still_plans() -> None:
+    """A missing get_identity_schema() means the same as one returning None."""
+    with _patched(DuckTypedResource):
+        response = await _plan_resource_change_impl(_request(), context=None)
+
+    assert not response.diagnostics
+    assert not response.HasField("planned_identity")
+    assert response.planned_state.msgpack
 
 
 # 🐍🏗️🔚

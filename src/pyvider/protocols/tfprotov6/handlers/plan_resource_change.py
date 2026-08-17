@@ -23,6 +23,7 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
     check_test_only_access,
     create_diagnostic_from_exception,
     cty_to_attrs_instance,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
@@ -137,6 +138,8 @@ def _create_resource_context(
     private_state_instance: Any,
     resource_class: Any,
     provider_instance: Any,
+    *,
+    identity_schema: PvsSchema | None = None,
     prior_identity: pb.ResourceIdentityData | None = None,
 ) -> ResourceContext:
     # Try to create attrs instances, but they may return None if values are unknown/computed
@@ -146,8 +149,6 @@ def _create_resource_context(
 
     provider_context = hub.get_component("singleton", "provider_context")
     test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
-
-    identity_schema = resource_class.get_identity_schema()
 
     return ResourceContext(
         config=config_instance,
@@ -242,9 +243,10 @@ def _derive_planned_identity_values(
         return identity_values
     except Exception as e:
         logger.warning(
-            "Omitting planned identity: derivation raised an exception, which may "
-            "indicate a bug in this resource's get_identity() override rather than an "
-            "identity value that is simply not yet knowable",
+            "Omitting planned identity: derivation raised an exception. This is not the "
+            "ordinary not-yet-knowable case, which returns None without raising -- it is "
+            "either planned-state data that failed to validate against the resource schema "
+            "or a bug in this resource's get_identity() override",
             operation="plan_resource_change",
             resource_type=resource_type,
             error_type=type(e).__name__,
@@ -292,6 +294,8 @@ async def _plan_resource_change_impl(
 
         private_state_instance = await _process_private_state(resource_class, request.prior_private)
 
+        identity_schema = resolve_identity_schema(resource_class)
+
         resource_context = _create_resource_context(
             config_cty_marked,
             prior_state_cty,
@@ -299,7 +303,8 @@ async def _plan_resource_change_impl(
             private_state_instance,
             resource_class,
             provider_instance,
-            request.prior_identity,
+            identity_schema=identity_schema,
+            prior_identity=request.prior_identity,
         )
 
         logger.debug(
@@ -324,7 +329,6 @@ async def _plan_resource_change_impl(
                 return response
 
         if planned_state_dict:
-            identity_schema = resource_class.get_identity_schema()
             identity_values = (
                 _derive_planned_identity_values(
                     resource_class, resource_schema, planned_state_dict, request.type_name

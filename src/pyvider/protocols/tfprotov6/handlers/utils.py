@@ -37,9 +37,27 @@ from pyvider.exceptions import (
 from pyvider.hub import hub
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.base import BaseResource
+from pyvider.schema import PvsSchema
 
 # Regex to parse attribute paths like `attr`, `attr[0]`, `attr["key"]`
 PATH_STEP_REGEX = re.compile(r"(\.?)(\w+)|\[(\d+)\]|\[['\"]([^'\"]+)['\"]\]")
+
+
+def resolve_identity_schema(resource_class: Any) -> PvsSchema | None:
+    """Return a resource's identity schema, or None if it declares none.
+
+    Registration does not require BaseResource: @register_resource only stamps
+    marker attributes, and discovery registers on the marker alone. A duck-typed
+    resource that predates identity therefore has no get_identity_schema() at
+    all, and calling it unguarded would turn a previously working resource into
+    an AttributeError. A missing method means the same thing as a method
+    returning None -- this resource has no identity.
+    """
+    getter = getattr(resource_class, "get_identity_schema", None)
+    if getter is None:
+        return None
+    schema: PvsSchema | None = getter()
+    return schema
 
 
 def get_all_components(component_type: str) -> dict[str, Any]:

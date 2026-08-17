@@ -19,9 +19,11 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
     check_test_only_access,
     create_diagnostic_from_exception,
     cty_to_attrs_instance,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
+from pyvider.schema import PvsSchema
 
 
 @rpc_handler("ReadResource")
@@ -30,16 +32,64 @@ async def ReadResourceHandler(request: pb.ReadResource.Request, context: Any) ->
     return await _read_resource_impl(request, context)
 
 
+def _derive_new_state_identity_values(
+    resource_class: Any,
+    new_state_attrs: Any,
+    resource_type: str,
+) -> dict[str, Any] | None:
+    """Derive identity from the post-read state, which -- like apply and unlike plan -- is
+    fully known.
+
+    This is only reached when the read returned a state, so both failure modes here are
+    genuine defects rather than "not yet knowable":
+
+    - A raised exception almost certainly indicates a bug in this resource's get_identity()
+      override -- there is no missing-state excuse left by this point.
+    - An ordinary None return means the identity schema's attribute names did not resolve
+      against the state object -- a schema/state mismatch.
+
+    Neither is surfaced as a Terraform diagnostic -- the read itself succeeded, and failing
+    it over an identity-derivation bug would report a live resource as unreadable, which is
+    strictly worse than the same bug being tolerated during plan and apply -- but both are
+    logged at WARNING so they are visible in provider logs instead of silently
+    disappearing.
+    """
+    try:
+        identity_values: dict[str, Any] | None = resource_class.get_identity(new_state_attrs)
+    except Exception as e:
+        logger.warning(
+            "Omitting new identity: derivation raised an exception after a successful read, "
+            "which likely indicates a bug in this resource's get_identity() override",
+            operation="read_resource",
+            resource_type=resource_type,
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        return None
+
+    if identity_values is None:
+        logger.warning(
+            "Omitting new identity: get_identity() returned None even though the new state "
+            "is fully known, which likely means the identity schema's attributes do not "
+            "resolve against this resource's state object",
+            operation="read_resource",
+            resource_type=resource_type,
+        )
+
+    return identity_values
+
+
 def _set_new_identity(
     response: pb.ReadResource.Response,
     resource_class: Any,
-    identity_schema: Any,
+    identity_schema: PvsSchema | None,
     new_state_attrs: Any,
+    resource_type: str,
 ) -> None:
     """Attach derived identity to the response, only when fully determinable."""
     if identity_schema is None:
         return
-    identity_values = resource_class.get_identity(new_state_attrs)
+    identity_values = _derive_new_state_identity_values(resource_class, new_state_attrs, resource_type)
     if identity_values is not None:
         response.new_identity.CopyFrom(marshal_identity(identity_values, identity_schema))
 
@@ -106,7 +156,7 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
         )
 
         resource_schema = resource_class.get_schema()
-        identity_schema = resource_class.get_identity_schema()
+        identity_schema = resolve_identity_schema(resource_class)
         prior_state_cty = unmarshal(request.current_state, schema=resource_schema.block)
         prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
 
@@ -187,7 +237,7 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
             new_state_cty = validator_type.validate(raw_state_dict)
             marshalled_new_state = marshal(new_state_cty, schema=resource_schema.block)
             response.new_state.msgpack = marshalled_new_state.msgpack
-            _set_new_identity(response, resource_class, identity_schema, new_state_attrs)
+            _set_new_identity(response, resource_class, identity_schema, new_state_attrs, request.type_name)
 
             logger.info(
                 "Resource read completed successfully with new state",

@@ -32,6 +32,7 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
     create_diagnostic_from_exception,
     cty_to_attrs_instance,
     is_valid_refinement,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
@@ -328,7 +329,7 @@ async def _apply_resource_change_impl(
 
         private_state_instance = await _process_private_state(resource_class, request.planned_private)
 
-        identity_schema = resource_class.get_identity_schema()
+        identity_schema = resolve_identity_schema(resource_class)
 
         resource_context = _create_resource_context(
             config_cty,

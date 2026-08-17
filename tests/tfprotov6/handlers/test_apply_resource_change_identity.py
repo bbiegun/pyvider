@@ -176,6 +176,22 @@ class IdentityResourceWithMismatchedSchema(_Base):
         return MISMATCHED_IDENTITY_SCHEMA
 
 
+class DuckTypedResource:
+    """Registered by marker attribute alone, with no BaseResource and therefore no
+    get_identity_schema(). @register_resource stamps markers and discovery registers on the
+    marker, so this shape predates identity and must not start raising AttributeError."""
+
+    config_class = DemoConfig
+    state_class = DemoState
+
+    @classmethod
+    def get_schema(cls) -> PvsSchema:
+        return RESOURCE_SCHEMA
+
+    async def apply(self, ctx: ResourceContext) -> tuple[Any, None]:
+        return DemoState(path="/tmp/x"), None
+
+
 def _request(planned_identity: pb.ResourceIdentityData | None = None) -> pb.ApplyResourceChange.Request:
     config = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
     planned_state = marshal({"path": "/tmp/x"}, schema=RESOURCE_SCHEMA.block)
@@ -282,6 +298,17 @@ async def test_impl_omits_new_identity_on_schema_state_mismatch() -> None:
 
     assert not any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
     assert not response.HasField("new_identity")
+
+
+@pytest.mark.asyncio
+async def test_impl_duck_typed_resource_without_get_identity_schema_still_applies() -> None:
+    """A missing get_identity_schema() means the same as one returning None."""
+    with _patched(DuckTypedResource):
+        response = await _apply_resource_change_impl(_request(), context=None)
+
+    assert not response.diagnostics
+    assert not response.HasField("new_identity")
+    assert response.new_state.msgpack
 
 
 # 🐍🏗️🔚
