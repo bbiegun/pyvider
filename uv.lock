@@ -3539,16 +3539,16 @@ dependencies = [
 requires-dist = [
     { name = "attrs", specifier = ">=25.3.0" },
     { name = "msgpack", specifier = ">=1.1.0" },
-    { name = "provide-foundation", specifier = ">=0.4.0" },
+    { name = "provide-foundation", editable = "../provide-foundation" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.148.8" },
     { name = "memray", marker = "sys_platform != 'emscripten'", specifier = ">=1.0" },
-    { name = "provide-testkit", extras = ["standard"], specifier = ">=0.4.0" },
+    { name = "provide-testkit", extras = ["standard"], editable = "../provide-testkit" },
 ]
-docs = [{ name = "provide-testkit", extras = ["docs"], specifier = ">=0.4.0" }]
+docs = [{ name = "provide-testkit", extras = ["docs"], editable = "../provide-testkit" }]
 
 [[package]]
 name = "pyvider-rpcplugin"
