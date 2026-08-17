@@ -47,8 +47,8 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import filecmp
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +84,28 @@ FOOTER = "\n# 🐍🏗️🔚\n"
 # importable as part of the pyvider package.
 GRPC_IMPORT_BEFORE = "import tfplugin6_pb2 as tfplugin6__pb2"
 GRPC_IMPORT_AFTER = "from pyvider.protocols.tfprotov6.protobuf import tfplugin6_pb2 as tfplugin6__pb2"
+
+# grpcio-tools stamps its own version into generated output in three places. Those
+# values are the floors pyproject declares -- tfplugin6_pb2.py enforces its triple
+# via ValidateProtobufRuntimeVersion, and tfplugin6_pb2_grpc.py raises below
+# GRPC_GENERATED_VERSION -- so --check masks them for the proto-drift comparison
+# and checks them separately against pyproject. Masking alone would let a
+# toolchain upgrade silently move a floor.
+PROTOBUF_BANNER_RE = re.compile(r"^# Protobuf Python Version: .*$", re.MULTILINE)
+PROTOBUF_RUNTIME_RE = re.compile(
+    r"(_runtime_version\.ValidateProtobufRuntimeVersion\(\s*"
+    r"_runtime_version\.Domain\.\w+,\s*)\d+,\s*\d+,\s*\d+,",
+)
+GRPC_GENERATED_RE = re.compile(r"^GRPC_GENERATED_VERSION = '.*'$", re.MULTILINE)
+
+MASK = "<toolchain-version>"
+
+
+def mask_toolchain_versions(text: str) -> str:
+    """Blank out generator-version tokens so only proto-derived drift compares."""
+    text = PROTOBUF_BANNER_RE.sub(f"# Protobuf Python Version: {MASK}", text)
+    text = PROTOBUF_RUNTIME_RE.sub(rf"\g<1>{MASK},", text)
+    return GRPC_GENERATED_RE.sub(f"GRPC_GENERATED_VERSION = '{MASK}'", text)
 
 
 def describe_proto_version(proto_path: Path) -> str:
@@ -179,7 +201,12 @@ def main() -> int:
         staged = generate(Path(tmp))
 
         if args.check:
-            stale = [p.name for p in staged if not filecmp.cmp(p, PROTO_DIR / p.name, shallow=False)]
+            stale = [
+                p.name
+                for p in staged
+                if mask_toolchain_versions(p.read_text())
+                != mask_toolchain_versions((PROTO_DIR / p.name).read_text())
+            ]
             if stale:
                 perr("Committed stubs are out of date: " + ", ".join(stale))
                 perr("Run: python scripts/regen_protobuf.py")
