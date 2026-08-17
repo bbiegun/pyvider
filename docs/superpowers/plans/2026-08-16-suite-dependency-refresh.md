@@ -34,7 +34,9 @@
 | `pyproject.toml` (each of 10 repos) | Cap removals, `[tool.uv.sources]` entries, floor rewrites |
 | `uv.lock` (each of 10 repos) | Regenerated |
 | `VERSION` (each of 10 repos) | Bumped to `0.5.0` |
-| `.github/workflows/ci.yml` (terraform-provider-pyvider) | Windows-ARM enablement so the cryptography ruling has a mechanism |
+| `scripts/audit_pins.py` (pyvider) | New — makes the floor-only policy checkable rather than remembered |
+
+No CI workflow files are modified. See Task 10 for why the Windows-ARM job that an earlier draft proposed would carry no signal.
 
 ---
 
@@ -851,13 +853,23 @@ Wave 5 of the suite dependency refresh."
 
 ---
 
-### Task 10: Wave 6 — terraform-provider-pyvider, cap removals, and Windows-ARM CI
+### Task 10: Wave 6 — terraform-provider-pyvider and the last cap removals
 
-Both remaining caps live here. The cryptography cap targets `win32` + `ARM64`, a platform **no CI job currently exercises**: this repo's `ci.yml` does not set `platform-preset`, so it defaults to `standard` (linux + macos only); `build-provider.yml` and `test-conformance.yml` run Windows with `continue-on-error: true`; and `test-conformance.yml:69` excludes windows_arm64 outright with the note "grpcio has no win_arm64 wheel". Dropping the cap and "letting Windows CI decide" therefore requires first giving that decision a mechanism.
+Both remaining caps live here.
+
+**The cryptography cap is inert, and verifying that replaced the original plan for this task.** The constraint carries the marker `sys_platform == 'win32' and platform_machine == 'ARM64'`. Checked against PyPI on 2026-08-16:
+
+- `grpcio` 1.83.0 publishes `win_amd64` and `win32` wheels for cp310–cp314. **No `win_arm64` wheel.** Open upstream request: grpc/grpc#39064.
+- `cryptography` 50.0.0 publishes only `win_amd64` Windows wheels. **No `win_arm64` wheel.**
+
+`pyvider` requires `grpcio>=1.83.0`, so Windows ARM64 cannot install the suite at all without building grpcio from source. The platform the cryptography cap constrains is one where the suite does not resolve in the first place, which is also why `test-conformance.yml:69` excludes windows_arm64 with the note "grpcio has no win_arm64 wheel".
+
+This means the cap can be neither justified nor refuted by testing, because the test cannot run — and an earlier draft of this task was wrong to propose enabling `include-windows: true` to obtain a verdict. That job would fail while installing dependencies, long before cryptography was exercised, producing a permanently red job and no signal. **Do not enable Windows-ARM CI for this purpose.**
+
+The cap is therefore removed as dead constraint rather than as a bet, and the genuinely useful fact — windows_arm64 is unsupported suite-wide because grpcio ships no wheel — is recorded where it will be read.
 
 **Files:**
 - Modify: `/Volumes/data/pyv/terraform-provider-pyvider/pyproject.toml` (both caps)
-- Modify: `/Volumes/data/pyv/terraform-provider-pyvider/.github/workflows/ci.yml`
 - Modify: `/Volumes/data/pyv/terraform-provider-pyvider/uv.lock`
 
 **Interfaces:**
@@ -877,27 +889,16 @@ to:
 
 ```toml
     "jq>=1.9.1; sys_platform != 'win32' or platform_machine != 'ARM64'",
-    # Floor only. The previous <=46.0.3 cap applied to win32/ARM64 and was never
-    # exercised by CI, so it could not be justified or refuted. Windows-ARM tests
-    # are enabled in ci.yml; if they fail on a newer cryptography, restore the cap
-    # here with a comment naming the observed failure.
+    # Floor only. The previous <=46.0.3 cap applied to win32/ARM64, where neither
+    # cryptography nor grpcio publishes a wheel (checked 2026-08-16: grpcio 1.83.0
+    # ships win_amd64/win32 only, grpc/grpc#39064; cryptography 50.0.0 ships
+    # win_amd64 only). Since pyvider requires grpcio>=1.83.0, that platform cannot
+    # install the suite at all, so the cap constrained a resolution that never
+    # happens. windows_arm64 is unsupported suite-wide for that reason.
     "cryptography>=46.0.0; sys_platform == 'win32' and platform_machine == 'ARM64'",
 ```
 
-- [ ] **Step 2: Give the ruling a mechanism — enable Windows tests in CI**
-
-In `/Volumes/data/pyv/terraform-provider-pyvider/.github/workflows/ci.yml`, add to the `with:` block of the `ci` job:
-
-```yaml
-      # Windows-ARM is the only platform the cryptography constraint applies to.
-      # Without this the constraint can be neither justified nor refuted, because
-      # the standard preset runs linux and macos only.
-      include-windows: true
-```
-
-`ci-tooling/.github/workflows/python-ci.yml` gates its `test-windows` and `test-windows-arm` jobs on `inputs.platform-preset == 'full' || inputs.include-windows`, so this enables both.
-
-- [ ] **Step 3: Upgrade**
+- [ ] **Step 2: Upgrade**
 
 ```bash
 cd /Volumes/data/pyv/terraform-provider-pyvider
@@ -905,7 +906,7 @@ uv lock --upgrade
 uv sync --all-groups
 ```
 
-- [ ] **Step 4: Run the gate**
+- [ ] **Step 3: Run the gate**
 
 ```bash
 cd /Volumes/data/pyv/terraform-provider-pyvider
@@ -917,32 +918,38 @@ uv run mypy ci/
 
 This repository's first-party Python lives in `ci/`, not `src/` — its wrknv `typecheck` task points there.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 cd /Volumes/data/pyv/terraform-provider-pyvider
 git add -A
-git commit -m "build: upgrade dependencies, uncap jq and cryptography, test Windows
+git commit -m "build: upgrade dependencies and uncap jq and cryptography
 
 Wave 6 of the suite dependency refresh, and the last capped pins in the core
 suite.
 
-The cryptography cap applied only to win32/ARM64, which no CI job ran: this
-workflow used the default standard preset (linux and macos), the build and
-conformance workflows mark Windows continue-on-error, and conformance
-excludes windows_arm64 entirely. A constraint on a platform nothing exercises
-can be neither justified nor refuted, so enabling Windows here is what makes
-dropping it a decision rather than a guess. If those jobs fail on a newer
-cryptography, the cap comes back with the failure recorded next to it."
+The cryptography cap applied only to win32/ARM64. Neither cryptography nor
+grpcio publishes a wheel for that platform -- grpcio 1.83.0 ships win_amd64
+and win32 only, with grpc/grpc#39064 open upstream, and cryptography 50.0.0
+ships win_amd64 only. Since pyvider requires grpcio>=1.83.0, Windows ARM64
+cannot resolve the suite at all, so the cap constrained an install that never
+happens. It is removed as dead constraint, and the fact worth keeping --
+windows_arm64 is unsupported suite-wide, and why -- is recorded beside the
+dependency instead."
 ```
 
-- [ ] **Step 6: Record the Windows-ARM outcome**
+- [ ] **Step 5: Confirm no Windows-ARM CI was added**
 
-After CI runs, check the `test-windows-arm` job. Note that `grpcio` may have no `win_arm64` wheel, which would fail that job for reasons unrelated to `cryptography` — read the failure before concluding anything. Three outcomes:
+An earlier draft of this task proposed enabling `include-windows: true` in `ci.yml` to obtain an empirical verdict on the cryptography cap. That was wrong and must not be implemented: `ci-tooling`'s `test-windows-arm` job runs on `windows-11-arm`, where installing `grpcio>=1.83.0` has no wheel to install. The job would fail during dependency installation, before cryptography was ever imported — a permanently red job carrying no information about the constraint it was added to test.
 
-- **Job passes:** the cap is correctly gone. Nothing further.
-- **Job fails on `cryptography`:** restore the cap in `pyproject.toml` with a comment quoting the failure.
-- **Job fails on `grpcio` wheel availability:** the platform is unsupported for reasons larger than this plan. Leave the cryptography cap off, and record that windows_arm64 is unsupported.
+Verify the workflow was left alone:
+
+```bash
+cd /Volumes/data/pyv/terraform-provider-pyvider
+git diff HEAD~1 --stat -- .github/
+```
+
+Expected: no output — `.github/` is untouched by this task.
 
 ---
 
@@ -1085,7 +1092,7 @@ if __name__ == "__main__":
 Run: `cd /Volumes/data/pyv/pyvider && uv run python scripts/audit_pins.py`
 Expected: `No capped pins across 10 core repositories.`
 
-If the cryptography cap was restored in Task 10 Step 6 after an observed Windows failure, that one line is the expected and documented exception — record it in the commit message rather than deleting the audit.
+Expect a clean run. Task 10 removes the cryptography cap as dead constraint rather than as a bet, so there is no pending Windows verdict that could reinstate it. If a cap does appear here, it is a real policy violation — fix it rather than annotating it.
 
 - [ ] **Step 3: Verify third-party floors resolve without source overrides**
 
