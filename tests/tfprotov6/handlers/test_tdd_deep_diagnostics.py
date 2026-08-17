@@ -36,11 +36,15 @@ async def assert_deep_diagnostic(
     """
     Helper to assert that validating a config against a schema produces a
     diagnostic with a specific, correctly formatted deep path.
-    """
-    validator_cty_type = schema.block.to_cty_type()
 
+    Goes through ``validate_config`` rather than reaching around it into
+    ``block.to_cty_type().validate()``. That is the entry point a provider
+    actually uses, and it is the only one that checks required-ness: cty allows
+    a null for any attribute, as go-cty does, so the null case below produces no
+    error at all -- and therefore no path -- unless the schema layer is in it.
+    """
     with pytest.raises(CtyValidationError) as exc_info:
-        validator_cty_type.validate(invalid_config)
+        schema.validate_config(invalid_config)
 
     # This is the core function we are testing the behavior of.
     diag = await create_diagnostic_from_exception(exc_info.value)

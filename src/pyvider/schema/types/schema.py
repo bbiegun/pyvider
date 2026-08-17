@@ -13,6 +13,7 @@ from pyvider.cty import CtyValidationError
 
 # CORRECTED IMPORT: Replace the obsolete PvsBlock with the new PvsObjectType.
 from pyvider.schema.exceptions import PvsSchemaDefinitionError
+from pyvider.schema.required import check_required_attributes
 from pyvider.schema.types.object import PvsObjectType
 
 
@@ -63,6 +64,12 @@ class PvsSchema:
         logger.debug("Validating configuration against schema", schema_version=self.version)
         if not isinstance(config, dict):
             raise CtyValidationError(f"Configuration must be a dictionary, but got {type(config).__name__}.")
+
+        # Required-ness is checked here, and only here. cty deliberately allows
+        # a null for any attribute -- go-cty does the same, and Terraform sends
+        # nulls constantly -- so the schema is the only thing that knows which
+        # attributes a practitioner must actually supply.
+        check_required_attributes(self.block, config)
 
         # Convert the schema's block to its CtyType representation to get the validator.
         validator = self.block.to_cty_type()
