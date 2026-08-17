@@ -25,6 +25,13 @@ hand:
     in place -- it records which protobuf/grpcio gencode version produced the
     file, which matters when chasing wire-format differences.
 
+``--check`` is therefore toolchain-version-sensitive, not just proto-sensitive:
+it byte-compares regenerated output against the committed stubs, and those
+version banners are part of the bytes. A different ``grpcio-tools`` would make it
+report "stubs are out of date" over nothing but banner churn, so ``grpcio-tools``
+is pinned exactly (not floored) in the ``dev`` dependency group. Bump that pin and
+regenerate in the same change.
+
 Usage::
 
     # regenerate from the currently vendored proto

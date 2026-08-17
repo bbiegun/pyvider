@@ -38,7 +38,13 @@ classifiers = [
 dependencies = [
     "attrs>=25.4.0",
     "click>=8.3.1",
-    "grpcio>=1.76.0",
+    # Floors are set by the committed protobuf stubs, which enforce them at
+    # import: tfplugin6_pb2_grpc.py pins GRPC_GENERATED_VERSION = '1.83.0' and
+    # raises RuntimeError below it, and tfplugin6_pb2.py calls
+    # ValidateProtobufRuntimeVersion(..., 7, 35, 1, ...). Raise these together
+    # with the stubs, never independently.
+    "grpcio>=1.83.0",
+    "protobuf>=7.35.1",
     "msgpack>=1.1.1",
     "google>=3.0.0",
     "cryptography>=45.0.7",
@@ -56,6 +62,13 @@ Issues = "https://github.com/provide-io/pyvider/issues"
 [dependency-groups]
 dev = [
     "provide-testkit[pyvider-dev]>=0.4.0",
+    # Pinned exactly, not floored: scripts/regen_protobuf.py --check byte-compares
+    # regenerated output against the committed stubs, and that output embeds the
+    # generating toolchain's version in its banners. Any grpcio-tools version drift
+    # makes the check report the stubs as out of date over pure banner churn. It
+    # arrives transitively via provide-testkit[pyvider-dev]; this pin makes it
+    # explicit so a routine testkit refresh cannot move it silently.
+    "grpcio-tools==1.83.0",
 ]
 docs = [
     "provide-testkit[docs]>=0.4.0",
