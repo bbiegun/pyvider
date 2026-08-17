@@ -371,6 +371,22 @@ def is_valid_refinement(plan: CtyValue, result: CtyValue) -> tuple[bool, str]:
 
 
 def str_path_to_proto_path(path_str: str | None) -> pb.AttributePath | None:
+    """Parse a hand-authored path string like `attr[0]["key"]` into proto steps.
+
+    This is the string-literal counterpart to `cty_path_to_proto_path` and is
+    meant for path strings a caller types out directly (e.g.
+    `ctx.add_attribute_error("tags[0]", ...)`), not for `str(cty_path)` /
+    `CtyPath.string()` output. That distinction matters for sets: `KeyStep`'s
+    `__str__` renders a set element's *value* (e.g. `[3]` or `['a']`) once it
+    no longer has the CtyValue to tell "this is a set element" apart from a
+    genuine int/string key -- the regex below has no way to recover that once
+    it is text, and would silently emit a plausible-but-wrong
+    element_key_int/element_key_string step, same as the bug this module's
+    `cty_path_to_proto_path` had. There is no fix at this layer because the
+    information is already gone by the time a string reaches here; a `CtyPath`
+    that might contain a set-element step should go through
+    `cty_path_to_proto_path` directly instead of being stringified first.
+    """
     if not path_str:
         return None
 
@@ -400,7 +416,29 @@ def cty_path_to_proto_path(cty_path: CtyPath | None) -> pb.AttributePath | None:
             case IndexStep(index=index):
                 proto_steps.append(pb.AttributePath.Step(element_key_int=index))
             case KeyStep(key=key):
+                if isinstance(key, CtyValue):
+                    # A set element keys itself (see KeyStep's docstring in
+                    # pyvider-cty and walk.py's `_child_steps`) -- `key` here is
+                    # a whole CtyValue, not a string or int. tfplugin6's
+                    # AttributePath.Step is a oneof of attribute_name /
+                    # element_key_string / element_key_int, documented as
+                    # addressing "an element in an *indexable* collection type" --
+                    # a set isn't one, so there is no honest string or int for
+                    # this step. `str(key)` would render the CtyValue's attrs
+                    # repr (e.g. "CtyValue(vtype=CtyString(), value='a', ...)"),
+                    # a fabricated address that sends Terraform looking for a key
+                    # that was never there. required.py's block-nesting check hits
+                    # the same wall and resolves it the same way: stop at the set
+                    # and report it, since that is the last position a consumer
+                    # can actually navigate to.
+                    break
                 proto_steps.append(pb.AttributePath.Step(element_key_string=str(key)))
+    # A path that is nothing but a set-element step (or starts with one)
+    # truncates to zero proto steps above. Keep the same "nothing more
+    # specific to point at" contract as an empty CtyPath rather than emit
+    # an AttributePath with an empty steps list.
+    if not proto_steps:
+        return None
     return pb.AttributePath(steps=proto_steps)
 
 

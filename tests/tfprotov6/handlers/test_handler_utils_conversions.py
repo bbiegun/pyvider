@@ -7,7 +7,7 @@
 
 import attrs
 
-from pyvider.cty import CtyList, CtyNumber, CtyObject, CtyString
+from pyvider.cty import CtyList, CtyNumber, CtyObject, CtySet, CtyString
 from pyvider.cty.path import CtyPath, GetAttrStep, IndexStep, KeyStep
 from pyvider.cty.values import CtyValue
 from pyvider.cty.values.markers import UNREFINED_UNKNOWN
@@ -336,6 +336,104 @@ class TestCtyPathToProtoPath:
         """Test that empty path returns None."""
         assert cty_path_to_proto_path(None) is None
         assert cty_path_to_proto_path(CtyPath(steps=[])) is None
+
+    def test_map_key_step_renders_as_element_key_string(self) -> None:
+        """A map's KeyStep carries a plain string key (see map.py's
+        `KeyStep(normalized_key)`, and walk.py's `KeyStep(key) for key in
+        sorted(payload)`). This is the live, already-shipping case and must
+        keep rendering as element_key_string, not be affected by the set
+        handling below.
+        """
+        cty_path = CtyPath(steps=[GetAttrStep(name="tags"), KeyStep(key="env")])
+        result = cty_path_to_proto_path(cty_path)
+
+        assert result is not None
+        assert len(result.steps) == 2
+        assert result.steps[0].attribute_name == "tags"
+        assert result.steps[1].element_key_string == "env"
+
+    def test_set_element_key_step_at_root_truncates_to_none(self) -> None:
+        """A set element's KeyStep carries a whole CtyValue (walk.py's
+        `_child_steps`: `KeyStep(element)` where `element` is a set member).
+        There is no tfplugin6 AttributePath.Step that can honestly address a
+        set element -- attribute_name/element_key_string/element_key_int only
+        cover attributes and *indexable* collections, and go-cty documents a
+        set element as "acting as its own key" rather than having one. A path
+        that is nothing but a set-element step therefore has nothing more
+        specific to point at than the root, matching the empty-path contract.
+        """
+        element = CtyValue(vtype=CtyString(), value="a")
+        cty_path = CtyPath(steps=[KeyStep(key=element)])
+
+        assert cty_path_to_proto_path(cty_path) is None
+
+    def test_set_element_key_step_truncates_remaining_path(self) -> None:
+        """A set element mid-path stops the proto path at the set itself
+        rather than inventing a position past it -- the same choice
+        required.py's block-nesting check makes for SET-nested blocks
+        ("an index here would be an invented position. Report the block.").
+        Steps after the set-element step (however they were produced) must
+        not appear in the output: there is no honest way to say "inside this
+        particular element."
+        """
+        element = CtyValue(vtype=CtyString(), value="prod")
+        cty_path = CtyPath(
+            steps=[
+                GetAttrStep(name="environments"),
+                KeyStep(key=element),
+                GetAttrStep(name="name"),
+            ]
+        )
+        result = cty_path_to_proto_path(cty_path)
+
+        assert result is not None
+        assert len(result.steps) == 1
+        assert result.steps[0].attribute_name == "environments"
+
+    def test_set_element_from_real_walk_path_truncates(self) -> None:
+        """End-to-end: a KeyStep produced by actually walking a CtySet value
+        (not a hand-built CtyValue) still truncates cleanly. This is the
+        exact shape `deep_values`/`walk` hand to a caller once they feed
+        paths into diagnostics.
+        """
+        from pyvider.cty.walk import deep_values
+
+        set_type = CtySet(element_type=CtyString())
+        set_value = set_type.validate({"a", "b"})
+
+        set_element_paths = [
+            path
+            for path, _value in deep_values(set_value)
+            if path.steps and isinstance(path.steps[-1], KeyStep)
+        ]
+        assert set_element_paths, "expected at least one KeyStep path from walking a set"
+
+        for path in set_element_paths:
+            key = path.steps[-1].key
+            assert isinstance(key, CtyValue)  # confirms this is the set-element shape, not a map key
+            assert cty_path_to_proto_path(path) is None
+
+    def test_nested_map_index_and_set_combination(self) -> None:
+        """A path that mixes an attribute, a list index, a map key, and a
+        trailing set-element step: everything up to the set renders
+        normally, and the set-element step truncates the rest.
+        """
+        element = CtyValue(vtype=CtyString(), value="x")
+        cty_path = CtyPath(
+            steps=[
+                GetAttrStep(name="clusters"),
+                IndexStep(index=2),
+                KeyStep(key="labels"),
+                KeyStep(key=element),
+            ]
+        )
+        result = cty_path_to_proto_path(cty_path)
+
+        assert result is not None
+        assert len(result.steps) == 3
+        assert result.steps[0].attribute_name == "clusters"
+        assert result.steps[1].element_key_int == 2
+        assert result.steps[2].element_key_string == "labels"
 
 
 # 🐍🏗️🔚
