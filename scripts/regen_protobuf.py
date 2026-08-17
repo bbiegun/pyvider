@@ -28,11 +28,12 @@ hand:
 ``--check`` makes two independent comparisons. It compares regenerated output
 against the committed stubs with the generator's version stamps masked, so a
 newer ``grpcio-tools`` cannot report "stubs are out of date" over banner churn
-alone; and it compares those masked stamps against the ``grpcio`` and
-``protobuf`` floors declared in ``pyproject.toml``, because the generated code
-enforces them at import. A toolchain upgrade that moves a floor therefore fails
-with a named mismatch rather than being silently absorbed -- raise the floors and
-regenerate in the same change.
+alone; and it reads those same stamps unmasked from the fresh output and
+compares them against the ``grpcio`` and ``protobuf`` floors declared in
+``pyproject.toml``, because the generated code enforces them at import. A
+toolchain upgrade that moves a floor therefore fails with a named mismatch
+rather than being silently absorbed -- raise the floors and regenerate in the
+same change.
 
 Usage::
 
