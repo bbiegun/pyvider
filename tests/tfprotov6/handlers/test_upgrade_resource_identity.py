@@ -108,8 +108,16 @@ async def test_empty_raw_identity_leaves_upgraded_identity_unset() -> None:
 
 @pytest.mark.asyncio
 async def test_version_zero_schema_makes_adoption_a_no_op() -> None:
-    """The actual fix for first-time adoption: s_identity() defaults to version 0, which
-    equals what is already in state, so the versions match and the hook is never called."""
+    """The actual fix for first-time adoption: s_identity() defaults to version 0,
+    matching the IdentitySchemaVersion (also 0) that Terraform's state already carries
+    for instances predating identity. That version match is what makes Terraform's own
+    early return fire and skip calling this RPC at all
+    (`internal/terraform/upgrade_resource_state.go:172`, "We don't need to do anything
+    if the identity schema version is already up-to-date") -- but that early return
+    lives in Terraform and is not exercised here. What this test actually exercises is
+    the handler's own, version-agnostic empty-payload guard (`upgrade_resource_identity.py:77`),
+    which returns before the version comparison at `:89` is ever reached, so this test
+    would pass even with a mismatched version; it does not itself prove the versions match."""
     schema = s_identity(attributes={"path": a_str(required=True)})
     assert schema.version == 0
     resource = _resource(schema=schema)

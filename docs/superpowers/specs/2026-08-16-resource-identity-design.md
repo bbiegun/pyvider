@@ -112,12 +112,13 @@ What reuse gives up, and how each is handled:
   identity object type.
 - **`PvsSchema.version` used to validate `> 0`, which was wrong for every
   schema, not just identity.** That floor is relaxed to `>= 0`. Terraform stores
-  a resource's schema version in state and it defaults to 0 — its own built-in
-  `terraform_data` resource declares `Version: 0`
-  (`internal/builtin/providers/terraform/resource_data.go:66`), and
-  `schema_version: 0` appears throughout the state round-trip fixtures under
-  `internal/states/statefile/testdata/roundtrip/`. Only negative versions are
-  rejected.
+  a resource's schema version in state as `SchemaVersion uint64`
+  (`internal/states/instance_object_src.go:29`), with no floor reserving 0 as a
+  sentinel, and `schema_version: 0` is a genuine persisted value throughout the
+  state round-trip fixtures under `internal/states/statefile/testdata/roundtrip/`
+  (e.g. `v4-modules`, `v4-simple`), alongside `schema_version: 1` in others
+  (`v3-bigint.out.tfstate`, `v3-grabbag.out.tfstate`). Only negative versions
+  are rejected.
 - **Identity versions start at 0, and `s_identity()` defaults to 0.** The proto
   says so directly — identity "versioning implicitly starts at 0 and by
   convention should be incremented by 1 each change"
@@ -126,10 +127,14 @@ What reuse gives up, and how each is handled:
   Terraform persists `IdentitySchemaVersion` in state
   (`internal/states/instance_object_src.go`), and it is 0 for every instance
   written before the resource declared identity. `upgradeResourceIdentity`
-  returns early only when the stored version equals the schema's; otherwise it
-  calls `UpgradeResourceIdentity` with `Version: 0` and an empty
-  `RawIdentityJSON`, on every state read
-  (`internal/terraform/upgrade_resource_state.go`,
+  returns early when the stored version equals the schema's; if the stored
+  version is instead *greater* than the schema's current version, Terraform
+  does not silently downgrade — it emits a hard `ERROR` diagnostic, "Resource
+  instance managed by newer provider version"
+  (`internal/terraform/upgrade_resource_state.go:158-170`). For every
+  pre-existing instance (stored version 0, lower than the schema's), it calls
+  `UpgradeResourceIdentity` with `Version: 0` and an empty `RawIdentityJSON`,
+  on every state read (`internal/terraform/upgrade_resource_state.go`,
   `internal/terraform/node_resource_abstract.go`). Defaulting to 1 would fire
   that RPC with no data to upgrade for every pre-existing instance. Defaulting
   to 0 means adopting identity on a live resource is a no-op at the protocol

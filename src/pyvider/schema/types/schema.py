@@ -20,16 +20,15 @@ def _validate_version(instance: object, attribute: object, value: int) -> None:
     """Reject negative schema versions.
 
     Zero is valid, and deliberately so. Terraform stores a resource's schema
-    version in state (``SchemaVersion`` on
-    ``internal/states/instance_object_src.go``) and it defaults to 0 for any
-    instance written before the provider started versioning -- Terraform's own
-    built-in ``terraform_data`` resource declares ``Version: 0``
-    (``internal/builtin/providers/terraform/resource_data.go:66``), and
-    ``schema_version: 0`` appears throughout its state round-trip fixtures. The
-    identity version has the same floor: the protocol says identity
-    "versioning implicitly starts at 0"
-    (``docs/plugin-protocol/tfplugin6.proto``). Only negative versions are
-    unrepresentable.
+    version in state as ``SchemaVersion uint64``
+    (``internal/states/instance_object_src.go:29``), with no floor reserving 0
+    as a sentinel, and ``"schema_version": 0`` is a genuine persisted value
+    throughout ``internal/states/statefile/testdata/roundtrip/`` (e.g.
+    ``v4-modules``, ``v4-simple``), alongside ``schema_version: 1`` in others
+    (``v3-bigint.out.tfstate``, ``v3-grabbag.out.tfstate``). The identity
+    version has the same floor: the protocol says identity "versioning
+    implicitly starts at 0" (``docs/plugin-protocol/tfplugin6.proto``). Only
+    negative versions are unrepresentable.
 
     Replaces a lambda that returned a bool. attrs signals validation failure by
     raising and discards return values, so the original enforced nothing.
