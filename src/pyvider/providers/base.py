@@ -7,10 +7,10 @@
 import asyncio
 from typing import Any
 
+import attrs
 from attrs import define, field
 from provide.foundation import logger
 
-from pyvider.cty import CtyType
 from pyvider.exceptions import FrameworkConfigurationError, ProviderError
 from pyvider.schema import PvsSchema
 
@@ -34,6 +34,21 @@ class ProviderMetadata:
     capabilities: ProviderCapabilities = field(factory=ProviderCapabilities)
 
 
+def _config_keys(config: Any) -> list[str]:
+    """Field names of a provider config, whatever it is.
+
+    The configure hook receives what the protocol layer produced: an attrs instance
+    for a populated config, None for an empty one, and a dict when called directly.
+    """
+    if config is None:
+        return []
+    if isinstance(config, dict):
+        return list(config.keys())
+    if attrs.has(type(config)):
+        return [f.name for f in attrs.fields(type(config))]
+    return []
+
+
 @define
 class BaseProvider:
     """
@@ -51,6 +66,7 @@ class BaseProvider:
     capabilities: dict[str, Any] = field(factory=dict, init=False)
     _setup_done: bool = field(default=False, init=False)
     _setup_lock: asyncio.Lock = field(factory=asyncio.Lock, init=False)
+    _configure_lock: asyncio.Lock = field(factory=asyncio.Lock, init=False)
 
     async def setup(self) -> None:
         """
@@ -135,9 +151,15 @@ class BaseProvider:
                 capabilities=list(self.capabilities.keys()),
             )
 
-    async def configure(self, config: dict[str, CtyType]) -> None:
-        """Configure the provider with the given configuration."""
-        async with asyncio.Lock():
+    async def configure(self, config: Any) -> None:
+        """Configure the provider with the given configuration.
+
+        The ``config`` parameter is an attrs instance produced by the framework's
+        configuration parsing (via ``BaseResource.from_cty()``).  It is not a
+        plain ``dict``; use attribute access (``config.api_key``) rather than
+        mapping access (``config["api_key"]`` or ``config.get("api_key")``).
+        """
+        async with self._configure_lock:
             if self._configured:
                 logger.warning(
                     "Attempted to configure provider that is already configured",
@@ -166,7 +188,7 @@ class BaseProvider:
                 operation="configure",
                 provider_name=self.metadata.name,
                 provider_version=self.metadata.version,
-                config_keys=list(config.keys()),
+                config_keys=_config_keys(config),
             )
             self._configured = True
             logger.info(

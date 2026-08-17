@@ -215,9 +215,10 @@ class TestValidateResourceConfigImpl:
             from pyvider.cty import CtyString, CtyValue
 
             # Create config with unknown value
-            config_cty = cty_type.validate({"name": "placeholder", "count": 5})
-            # Make name unknown
-            config_cty.value["name"] = CtyValue.unknown(CtyString())
+            # Built with the unknown in place. A CtyValue's payload is
+            # immutable: mutating it used to work and quietly invalidated the
+            # deep-mark memo cached against that value.
+            config_cty = cty_type.validate({"name": CtyValue.unknown(CtyString()), "count": 5})
 
             from pyvider.conversion import marshal
 

@@ -4,9 +4,11 @@
 #
 
 
+from pyvider.data_sources.base import BaseDataSource
 from pyvider.data_sources.decorators import register_data_source
 
 __all__ = [
+    "BaseDataSource",
     "register_data_source",
 ]
 

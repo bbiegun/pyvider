@@ -12,6 +12,7 @@ import attrs
 from provide.foundation import logger
 from provide.foundation.errors import FoundationError
 
+from pyvider.conversion.marshaler import _unmark_deep
 from pyvider.cty import CtyList, CtyObject, CtyTuple, CtyValue
 from pyvider.cty.exceptions import (
     CtyAttributeValidationError,
@@ -348,10 +349,22 @@ def is_valid_refinement(plan: CtyValue, result: CtyValue) -> tuple[bool, str]:
     if plan.is_unknown:
         return True, ""
 
-    if plan.value != result.value:
+    # Compared unmarked. Marks are metadata about a value, not part of it, and
+    # the inbound path deliberately marks config from the schema -- so a
+    # resource that echoes a sensitive attribute into its state hands back a
+    # value that is equal in every respect except its marks. CtyValue.__eq__
+    # counts marks, so comparing directly reports a contract violation for a
+    # state that is in fact identical, and fails the apply.
+    if _unmark_deep(plan.value) != _unmark_deep(result.value):
+        # The values themselves are deliberately NOT in this message. It becomes
+        # a tfplugin6.Diagnostic, which Terraform prints to the console and
+        # writes to logs, and that channel has no redaction. A refinement
+        # mismatch on a sensitive attribute would otherwise disclose the secret
+        # in plaintext -- and any mismatch would disclose whatever the value is.
         return (
             False,
-            f"Value mismatch: planned value was '{plan.value}', result was '{result.value}'.",
+            f"Value mismatch: the result differs from the planned value (type {plan.type}). "
+            "Values are omitted here because this message is returned to Terraform.",
         )
 
     return True, ""

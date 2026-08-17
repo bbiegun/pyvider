@@ -133,23 +133,25 @@ class MyCloudProvider(BaseProvider):
             ),
         })
 
-    async def configure(self, config: dict) -> None:
+    async def configure(self, config: Any) -> None:
         """
         Configure the provider with user settings.
 
         This method is called by Terraform with the provider configuration
-        from the user's Terraform files.
+        from the user's Terraform files.  The ``config`` parameter is an attrs
+        instance — use attribute access (``config.api_key``) rather than
+        mapping access (``config["api_key"]`` or ``config.get("api_key")``).
         """
         await super().configure(config)
 
-        # Convert config dict to attrs instance
+        # Config is already an attrs instance from framework parsing
         self.provider_config = MyCloudConfig(
-            api_key=config["api_key"],
-            api_endpoint=config.get("api_endpoint", "https://api.mycloud.com/v1"),
-            region=config.get("region", "us-east-1"),
-            timeout=config.get("timeout", 30),
-            max_retries=config.get("max_retries", 3),
-            verify_ssl=config.get("verify_ssl", True),
+            api_key=config.api_key,
+            api_endpoint=config.api_endpoint,
+            region=config.region,
+            timeout=config.timeout,
+            max_retries=config.max_retries,
+            verify_ssl=config.verify_ssl,
         )
 
         # Initialize API client

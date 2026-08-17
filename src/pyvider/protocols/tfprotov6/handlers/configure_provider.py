@@ -10,7 +10,7 @@ from provide.foundation import logger
 from provide.foundation.config import get_env, parse_bool_extended
 
 from pyvider.conversion import unmarshal
-from pyvider.exceptions import ProviderConfigurationError, PyviderError
+from pyvider.exceptions import ProviderConfigurationError, ProviderError, PyviderError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import create_diagnostic_from_exception
@@ -31,6 +31,19 @@ async def ConfigureProviderHandler(
     subsequent component operations.
     """
     return await _configure_provider_impl(request, context)
+
+
+def _resolve_test_mode(config_instance: Any) -> tuple[bool, str]:
+    """Resolve pyvider_testmode: env var beats HCL config beats default."""
+    env_testmode_str = get_env("PYVIDER_TESTMODE", default=None)
+    env_testmode = parse_bool_extended(env_testmode_str) if env_testmode_str else None
+    config_testmode = getattr(config_instance, "pyvider_testmode", None)
+
+    if env_testmode is not None:
+        return env_testmode, "PYVIDER_TESTMODE environment variable"
+    if config_testmode is not None:
+        return config_testmode, "provider configuration (HCL)"
+    return False, "default"
 
 
 async def _configure_provider_impl(
@@ -129,34 +142,56 @@ async def _configure_provider_impl(
             provider_name=provider_instance.metadata.name,
         )
 
-        # Check PYVIDER_TESTMODE environment variable (highest priority)
-        env_testmode_str = get_env("PYVIDER_TESTMODE", default=None)
-        env_testmode = parse_bool_extended(env_testmode_str) if env_testmode_str else None
-
-        # Check HCL configuration (lower priority)
-        config_testmode = getattr(config_instance, "pyvider_testmode", None)
-
-        # Environment variable takes precedence over HCL config
-        if env_testmode is not None:
-            test_mode_enabled = env_testmode
-            test_mode_source = "PYVIDER_TESTMODE environment variable"
-        elif config_testmode is not None:
-            test_mode_enabled = config_testmode
-            test_mode_source = "provider configuration (HCL)"
-        else:
-            test_mode_enabled = False
-            test_mode_source = "default"
+        # Check PYVIDER_TESTMODE environment variable (highest priority),
+        # then HCL configuration, then default.
+        test_mode_enabled, test_mode_source = _resolve_test_mode(config_instance)
 
         logger.debug(
             "Resolved pyvider_testmode",
             config_instance_type=type(config_instance).__name__,
-            env_testmode=env_testmode,
-            config_testmode=config_testmode,
             final_value=test_mode_enabled,
             source=test_mode_source,
         )
-        provider_context = ProviderContext(config=config_instance, test_mode_enabled=test_mode_enabled)
-        hub.register("singleton", "provider_context", provider_context)
+
+        # The provider's own configure() hook: where a provider turns configuration
+        # into whatever it needs to serve requests — an API client, credentials, a
+        # working directory. Registering the context after the hook fully succeeds
+        # ensures the published context always matches the live provider object's
+        # state, and a failed hook does not leave _configured stuck True with no client.
+        try:
+            await provider_instance.configure(config_instance)
+            # Hook succeeded — now safe to mark configured and publish context.
+            provider_instance._configured = True
+            provider_context = ProviderContext(
+                config=config_instance, test_mode_enabled=test_mode_enabled
+            )
+            hub.register("singleton", "provider_context", provider_context)
+        except ProviderError:
+            # ProviderError raised by the hook itself (not the "already configured"
+            # guard in BaseProvider.configure).  Re-raise only if it's not the
+            # expected "already configured" signal from a repeated RPC.
+            if provider_instance._configured:
+                # Already configured — this is a repeated RPC, treat as success
+                # (the "configure once" rule concerns multiple provider BLOCKS,
+                # not repeated ConfigureProvider RPCs).
+                logger.debug(
+                    "Provider was already configured",
+                    operation="configure_provider",
+                    provider_name=provider_instance.metadata.name,
+                )
+            else:
+                raise
+        except Exception as e:
+            logger.error(
+                "Provider configure() hook failed",
+                operation="configure_provider",
+                provider_name=provider_instance.metadata.name,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                exc_info=True,
+            )
+            response.diagnostics.append(await create_diagnostic_from_exception(e))
+            return response
 
         if test_mode_enabled:
             logger.warning(

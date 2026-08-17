@@ -232,8 +232,13 @@ Import existing infrastructure into Terraform management:
 ### Implementing Import
 
 ```python
-async def import_state(self, resource_id: str) -> ServerState | None:
-    """Import existing server into Terraform state."""
+async def import_state(self, ctx, import_id: str) -> ServerState | None:
+    """Import existing infrastructure into Terraform state.
+
+    The framework passes a ``ResourceContext`` and the import ID string;
+    resources whose identity is more than just an ID (e.g. workspace + name)
+    must locate the object from the ID alone.
+    """
     try:
         server = await self.api.get_server(resource_id)
     except NotFoundError:
@@ -522,7 +527,7 @@ class Server(BaseResource):
     async def read(self, ctx): ...
     async def _update_apply(self, ctx): ...
     async def _delete_apply(self, ctx): ...
-    async def import_state(self, resource_id): ...
+    async def import_state(self, ctx, import_id: str): ...
 ```
 
 ### 2. Handle Missing Resources

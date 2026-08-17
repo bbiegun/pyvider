@@ -230,3 +230,56 @@ class TestConfigureProviderHandler:
 
 
 # 🐍🏗️🔚
+
+
+class TestConfigureHookIsInvoked:
+    """The provider's own configure() hook.
+
+    Registering the ProviderContext is not enough: a provider that overrides
+    configure() to build a client from its configuration gets nothing, and every
+    request afterwards runs on defaults — with no error to say so.
+    """
+
+    @pytest.mark.asyncio
+    async def test_configure_hook_receives_the_config(self, provider_in_hub: Any) -> None:
+        from provide.testkit.mocking import patch
+
+        from pyvider.conversion import marshal
+
+        provider = hub.get_component("singleton", "provider")
+        seen: list[Any] = []
+
+        async def spy(_self: Any, config: Any) -> None:
+            seen.append(config)
+
+        # BaseProvider is an attrs class with slots, so the method is patched on the
+        # CLASS rather than the instance.
+        with patch.object(type(provider), "configure", spy):
+            schema = provider.schema
+            config_cty = schema.block.to_cty_type().validate({})
+            request = pb.ConfigureProvider.Request(config=marshal(config_cty, schema=schema.block))
+
+            response = await ConfigureProviderHandler(request, context=None)
+
+        assert len(seen) == 1, "the provider's configure() hook was not called"
+        assert not [d for d in response.diagnostics if d.severity == pb.Diagnostic.ERROR]
+
+    @pytest.mark.asyncio
+    async def test_configuring_twice_is_not_an_error(self, provider_in_hub: Any) -> None:
+        """Terraform may configure a provider more than once in a session.
+
+        The "configure once" rule is about multiple provider BLOCKS; a repeated RPC
+        must not fail the operation.
+        """
+        from pyvider.conversion import marshal
+
+        provider = hub.get_component("singleton", "provider")
+        schema = provider.schema
+        config_cty = schema.block.to_cty_type().validate({})
+        request = pb.ConfigureProvider.Request(config=marshal(config_cty, schema=schema.block))
+
+        first = await ConfigureProviderHandler(request, context=None)
+        second = await ConfigureProviderHandler(request, context=None)
+
+        for response in (first, second):
+            assert not [d for d in response.diagnostics if d.severity == pb.Diagnostic.ERROR]
