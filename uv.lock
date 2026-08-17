@@ -4,10 +4,10 @@ requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
     "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten'",
+    "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "(python_full_version < '3.13' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
 ]
 
@@ -2810,8 +2810,8 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-grpc", marker = "extra == 'opentelemetry'", specifier = ">=1.22.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'opentelemetry'", specifier = ">=1.22.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'opentelemetry'", specifier = ">=1.22.0" },
-    { name = "provide-foundation", extras = ["cli", "compression", "crypto", "extended", "opentelemetry", "transport"], marker = "extra == 'all'", specifier = ">=0.4.0" },
-    { name = "provide-foundation", extras = ["platform", "process"], marker = "extra == 'extended'", specifier = ">=0.4.0" },
+    { name = "provide-foundation", extras = ["cli", "compression", "crypto", "extended", "opentelemetry", "transport"], marker = "extra == 'all'", specifier = ">=0.5.0" },
+    { name = "provide-foundation", extras = ["platform", "process"], marker = "extra == 'extended'", specifier = ">=0.5.0" },
     { name = "psutil", marker = "extra == 'platform'", specifier = ">=7.0.0" },
     { name = "psutil", marker = "extra == 'process'", specifier = ">=7.0.0" },
     { name = "py-cpuinfo", marker = "extra == 'platform'", specifier = ">=9.0.0" },
@@ -2825,9 +2825,9 @@ provides-extras = ["cli", "compression", "crypto", "transport", "opentelemetry",
 [package.metadata.requires-dev]
 dev = [
     { name = "memray", specifier = ">=1.0" },
-    { name = "provide-testkit", extras = ["advanced-testing", "build", "standard", "typecheck", "utils"], specifier = ">=0.4.0" },
+    { name = "provide-testkit", extras = ["advanced-testing", "build", "standard", "typecheck", "utils"], editable = "../provide-testkit" },
 ]
-docs = [{ name = "provide-testkit", extras = ["docs"], specifier = ">=0.4.0" }]
+docs = [{ name = "provide-testkit", extras = ["docs"], editable = "../provide-testkit" }]
 protobuf = [{ name = "protobuf", specifier = ">=6.32.0" }]
 
 [[package]]
@@ -2967,12 +2967,12 @@ requires-dist = [
     { name = "pip-audit", marker = "extra == 'security'" },
     { name = "pre-commit", marker = "extra == 'build'" },
     { name = "provide-foundation", editable = "../provide-foundation" },
-    { name = "provide-testkit", extras = ["advanced-testing", "build", "crypto", "docs", "fuzzing", "grpc", "process", "profiling", "quality", "security", "transport", "typecheck", "utils"], marker = "extra == 'all'", specifier = ">=0.4.0" },
-    { name = "provide-testkit", extras = ["advanced-testing", "build", "grpc", "profiling", "security", "standard", "typecheck"], marker = "extra == 'pyvider-dev'", specifier = ">=0.4.0" },
-    { name = "provide-testkit", extras = ["advanced-testing", "quality"], marker = "extra == 'dev'", specifier = ">=0.4.0" },
-    { name = "provide-testkit", extras = ["crypto", "process", "quality", "transport"], marker = "extra == 'standard'", specifier = ">=0.4.0" },
-    { name = "provide-testkit", extras = ["docs"], marker = "extra == 'docs-standalone'", specifier = ">=0.4.0" },
-    { name = "provide-testkit", extras = ["grpc", "standard", "typecheck"], marker = "extra == 'grpc-dev'", specifier = ">=0.4.0" },
+    { name = "provide-testkit", extras = ["advanced-testing", "build", "crypto", "docs", "fuzzing", "grpc", "process", "profiling", "quality", "security", "transport", "typecheck", "utils"], marker = "extra == 'all'", specifier = ">=0.5.0" },
+    { name = "provide-testkit", extras = ["advanced-testing", "build", "grpc", "profiling", "security", "standard", "typecheck"], marker = "extra == 'pyvider-dev'", specifier = ">=0.5.0" },
+    { name = "provide-testkit", extras = ["advanced-testing", "quality"], marker = "extra == 'dev'", specifier = ">=0.5.0" },
+    { name = "provide-testkit", extras = ["crypto", "process", "quality", "transport"], marker = "extra == 'standard'", specifier = ">=0.5.0" },
+    { name = "provide-testkit", extras = ["docs"], marker = "extra == 'docs-standalone'", specifier = ">=0.5.0" },
+    { name = "provide-testkit", extras = ["grpc", "standard", "typecheck"], marker = "extra == 'grpc-dev'", specifier = ">=0.5.0" },
     { name = "psutil", marker = "extra == 'process'", specifier = ">=7.0.0" },
     { name = "pygments", marker = "extra == 'docs'" },
     { name = "pymdown-extensions", marker = "extra == 'docs'" },
@@ -3021,7 +3021,7 @@ dev = [
     { name = "mkdocs-macros-plugin" },
     { name = "mkdocstrings" },
     { name = "mkdocstrings-python" },
-    { name = "provide-testkit", extras = ["quality", "advanced-testing"], specifier = ">=0.4.0" },
+    { name = "provide-testkit", extras = ["quality", "advanced-testing"], specifier = ">=0.5.0" },
 ]
 docs = []
 
