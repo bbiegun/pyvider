@@ -162,9 +162,7 @@ async def _configure_provider_impl(
             await provider_instance.configure(config_instance)
             # Hook succeeded — now safe to mark configured and publish context.
             provider_instance._configured = True
-            provider_context = ProviderContext(
-                config=config_instance, test_mode_enabled=test_mode_enabled
-            )
+            provider_context = ProviderContext(config=config_instance, test_mode_enabled=test_mode_enabled)
             hub.register("singleton", "provider_context", provider_context)
         except ProviderError:
             # ProviderError raised by the hook itself (not the "already configured"
