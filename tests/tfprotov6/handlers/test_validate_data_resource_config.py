@@ -5,17 +5,24 @@
 
 """Tests for ValidateDataResourceConfig handler."""
 
+from typing import Any
+
+import attrs
 from provide.testkit.mocking import AsyncMock, MagicMock, patch
 import pytest
 
 from pyvider.cty import CtyObject, CtyString
 from pyvider.cty.exceptions import CtyValidationError
+from pyvider.data_sources.base import BaseDataSource
 from pyvider.exceptions import PyviderError
+from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers.validate_data_resource_config import (
     ValidateDataResourceConfigHandler,
     _validate_data_resource_config_impl,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
+from pyvider.resources.context import ResourceContext
+from pyvider.schema import PvsSchema, a_str, s_data_source
 
 
 @pytest.fixture
@@ -359,6 +366,70 @@ class TestValidateDataResourceConfigEdgeCases:
             response = await ValidateDataResourceConfigHandler(sample_request, context=context)
 
             assert isinstance(response, pb.ValidateDataResourceConfig.Response)
+
+
+@attrs.define(frozen=True)
+class _RequiredAttrConfig:
+    name: str | None = None
+
+
+@attrs.define(frozen=True)
+class _RequiredAttrState:
+    name: str | None = None
+
+
+class _RequiredAttrDataSource(BaseDataSource[Any, _RequiredAttrState, _RequiredAttrConfig]):  # type: ignore[type-arg]
+    """A minimal data source with a single required attribute, for the
+    present-null regression test below. Uses the real schema/hub/unmarshal
+    path rather than mocks."""
+
+    config_class = _RequiredAttrConfig
+    state_class = _RequiredAttrState
+
+    @classmethod
+    def get_schema(cls) -> PvsSchema:
+        return s_data_source({"name": a_str(required=True)})
+
+    async def _validate_config(self, config: _RequiredAttrConfig) -> list[str]:
+        return []
+
+    async def read(self, ctx: ResourceContext) -> _RequiredAttrState:
+        return _RequiredAttrState(name="x")
+
+
+class TestValidateDataResourceConfigRequiredAttributeRegression:
+    """A present-but-null required attribute must be rejected, not silently accepted.
+
+    Terraform marshals every unset argument as a present null via
+    ImpliedType(), not an absent key, so this is the common case in practice.
+    cty 0.5's CtyObject.validate no longer refuses this on its own (see
+    pyvider.schema.required); the schema layer's own check has to be wired
+    into this handler. The wire bytes below are `{"name": null}` (map with
+    one key "name" -> msgpack nil), matching the schema's one and only
+    attribute exactly, so there is no other required/computed attribute that
+    could be missing and mask the result.
+    """
+
+    @pytest.mark.asyncio
+    async def test_handler_rejects_present_null_required_attribute(self) -> None:
+        hub.register("data_source", "test_required_attr", _RequiredAttrDataSource)
+
+        try:
+            request = pb.ValidateDataResourceConfig.Request(
+                type_name="test_required_attr",
+                config=pb.DynamicValue(msgpack=b"\x81\xa4name\xc0"),
+            )
+
+            response = await ValidateDataResourceConfigHandler(request, context=None)
+
+            assert len(response.diagnostics) > 0
+            assert any("null" in str(d.summary).lower() for d in response.diagnostics)
+            assert any(
+                d.attribute.steps and d.attribute.steps[0].attribute_name == "name"
+                for d in response.diagnostics
+            )
+        finally:
+            hub.unregister("data_source", "test_required_attr")
 
 
 # 🐍🏗️🔚

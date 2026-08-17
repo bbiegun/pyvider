@@ -28,6 +28,7 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
 from pyvider.schema import PvsSchema
+from pyvider.schema.required import check_required_attributes
 
 
 async def _get_resource_and_provider_instances(type_name: str) -> tuple[Any, Any]:
@@ -204,6 +205,16 @@ def _handle_planned_state_dict(
 
     logger.debug("Raw values for validation", keys=list(raw_values_for_validation.keys()))
 
+    # cty 0.5 no longer refuses a present-but-null value for a required
+    # attribute (see pyvider.schema.required). Config nulls are already
+    # rejected earlier, at ValidateResourceConfig -- this catches a different
+    # thing: a bug in *this provider's* plan() implementation that left a
+    # required, non-computed attribute null in the planned state it is about
+    # to hand back to Terraform. Raises, and is caught the same way as every
+    # other planning failure by _plan_resource_change_impl's own exception
+    # handling.
+    check_required_attributes(resource_schema.block, raw_values_for_validation)
+
     # Validate the planned state - unknown values will be preserved by CTY
     planned_state_cty_final = validator_type.validate(raw_values_for_validation)
     marshalled_planned_state = marshal(planned_state_cty_final, schema=resource_schema.block)
@@ -234,6 +245,12 @@ def _derive_planned_identity_values(
     disappearing.
     """
     try:
+        # cty 0.5 no longer refuses a present-but-null value for a required
+        # attribute (see pyvider.schema.required); a null there is exactly
+        # the "malformed/incomplete planned-state data" this function's
+        # broad except already documents catching, so it is checked here
+        # too and left to that same except -- omit identity, warn, move on.
+        check_required_attributes(resource_schema.block, planned_state_dict)
         identity_values: dict[str, Any] | None = resource_class.get_identity(
             cty_to_attrs_instance(
                 resource_schema.block.to_cty_type().validate(planned_state_dict),

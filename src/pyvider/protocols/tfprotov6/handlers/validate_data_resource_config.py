@@ -15,6 +15,7 @@ from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import create_diagnostic_from_exception, cty_to_attrs_instance
 import pyvider.protocols.tfprotov6.protobuf as pb
+from pyvider.schema.required import check_required_attributes
 
 
 @rpc_handler("ValidateDataResourceConfig")
@@ -61,6 +62,12 @@ async def _validate_data_resource_config_impl(
 
         ds_schema = ds_class.get_schema()
         config_cty = unmarshal(request.config, schema=ds_schema.block)
+
+        # See validate_resource_config.py: cty 0.5 no longer refuses a
+        # present-but-null value for a required attribute, so the schema
+        # layer's own check has to be called explicitly here.
+        check_required_attributes(ds_schema.block, config_cty.value)
+
         config_instance = cty_to_attrs_instance(config_cty, ds_class.config_class)
 
         data_source_instance = ds_class()

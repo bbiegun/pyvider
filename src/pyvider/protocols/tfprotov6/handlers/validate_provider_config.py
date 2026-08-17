@@ -16,6 +16,7 @@ from pyvider.protocols.tfprotov6.protobuf import (
     Diagnostic,
 )
 from pyvider.resources.base import BaseResource
+from pyvider.schema.required import check_required_attributes
 
 
 @rpc_handler("ValidateProviderConfig")
@@ -40,25 +41,10 @@ async def _validate_provider_config_impl(
         # Get provider instance and parse config to check test mode
         provider_instance = hub.get_component("singleton", "provider")
         if provider_instance and request.config.msgpack:
+            provider_schema = provider_instance.schema
+            config_cty = None
             try:
-                provider_schema = provider_instance.schema
                 config_cty = unmarshal(request.config, schema=provider_schema.block)
-
-                if not config_cty.is_unknown:
-                    config_instance = BaseResource.from_cty(config_cty, provider_instance.config_class)  # type: ignore[arg-type]
-                    if config_instance:
-                        test_mode_enabled = getattr(config_instance, "pyvider_testmode", False)
-
-                        if test_mode_enabled:
-                            logger.warning(
-                                "⚠️  Provider test mode ENABLED - test-only components will be accessible",
-                                operation="validate_provider_config",
-                            )
-                        else:
-                            logger.debug(
-                                "Provider test mode NOT enabled - test-only components will be filtered out",
-                                operation="validate_provider_config",
-                            )
             except Exception as e:
                 # Don't fail validation if we can't parse config for logging
                 logger.debug(
@@ -66,6 +52,42 @@ async def _validate_provider_config_impl(
                     operation="validate_provider_config",
                     error=str(e),
                 )
+
+            if config_cty is not None:
+                # cty 0.5 no longer refuses a present-but-null value for a
+                # required attribute (see pyvider.schema.required), so the
+                # schema layer's own check is called explicitly here.
+                # Deliberately outside the swallow-all block above: a
+                # genuinely missing required argument must fail validation,
+                # not just skip the test-mode log line below. It is allowed
+                # to propagate to this function's own outer `except
+                # Exception`, which is this handler's one existing way of
+                # turning a failure into a diagnostic.
+                check_required_attributes(provider_schema.block, config_cty.value)
+
+                try:
+                    if not config_cty.is_unknown:
+                        config_instance = BaseResource.from_cty(config_cty, provider_instance.config_class)  # type: ignore[arg-type]
+                        if config_instance:
+                            test_mode_enabled = getattr(config_instance, "pyvider_testmode", False)
+
+                            if test_mode_enabled:
+                                logger.warning(
+                                    "⚠️  Provider test mode ENABLED - test-only components will be accessible",
+                                    operation="validate_provider_config",
+                                )
+                            else:
+                                logger.debug(
+                                    "Provider test mode NOT enabled - test-only components will be filtered out",
+                                    operation="validate_provider_config",
+                                )
+                except Exception as e:
+                    # Don't fail validation if we can't parse config for logging
+                    logger.debug(
+                        "Could not parse config for test mode check",
+                        operation="validate_provider_config",
+                        error=str(e),
+                    )
 
         # Provider configuration validation is typically minimal
         # Most validation happens in the provider's configure() method

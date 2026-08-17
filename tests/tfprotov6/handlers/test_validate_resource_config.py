@@ -272,6 +272,42 @@ class TestValidateResourceConfigEdgeCases:
             hub.unregister("resource", "test_resource")
 
     @pytest.mark.asyncio
+    async def test_handler_rejects_present_null_required_attribute(self, provider_in_hub: Any) -> None:
+        """A present-but-null required attribute must be rejected, not silently accepted.
+
+        Terraform marshals every unset argument as a present null via
+        ImpliedType(), not an absent key, so this is the common case in
+        practice -- not an edge case. cty 0.5's CtyObject.validate no longer
+        refuses this on its own (see pyvider.schema.required); the schema
+        layer's own check has to be wired into the handler. The wire bytes
+        below are `{"name": null}` (map with one key "name" -> msgpack nil)
+        built directly rather than through `marshal`/`validate`, since
+        constructing it the "normal" way requires the exact call that used to
+        reject it. SampleValidateResource's schema declares only `name` as
+        required -- `id` is computed and `count` is optional, so both may be
+        legitimately absent from the map without tripping cty's separate
+        "missing required attribute" check for an absent key.
+        """
+        hub.register("resource", "test_resource", SampleValidateResource)
+
+        try:
+            request = pb.ValidateResourceConfig.Request(
+                type_name="test_resource",
+                config=pb.DynamicValue(msgpack=b"\x81\xa4name\xc0"),
+            )
+
+            response = await ValidateResourceConfigHandler(request, context=None)
+
+            assert len(response.diagnostics) > 0
+            assert any("null" in str(d.summary).lower() for d in response.diagnostics)
+            assert any(
+                d.attribute.steps and d.attribute.steps[0].attribute_name == "name"
+                for d in response.diagnostics
+            )
+        finally:
+            hub.unregister("resource", "test_resource")
+
+    @pytest.mark.asyncio
     async def test_handler_metrics_recorded(self, provider_in_hub: Any) -> None:
         """Test that handler records metrics."""
         hub.register("resource", "test_resource", SampleValidateResource)

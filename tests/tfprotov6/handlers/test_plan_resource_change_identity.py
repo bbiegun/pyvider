@@ -13,6 +13,7 @@ import pytest
 
 from pyvider.conversion import marshal, marshal_identity, unmarshal_identity
 from pyvider.protocols.tfprotov6.handlers.plan_resource_change import (
+    _derive_planned_identity_values,
     _handle_planned_state_dict,
     _plan_resource_change_impl,
 )
@@ -145,6 +146,26 @@ class IdentityResourceRaisingOnDerive(_Base):
         raise RuntimeError("boom: buggy get_identity() override")
 
 
+class IdentityResourceTrustingStateBlindly(_Base):
+    """A resource whose get_identity() override, unlike BaseResource's
+    default (which null-checks every identity attribute -- see
+    get_identity's own docstring), trusts state at face value. Used to prove
+    _derive_planned_identity_values's own required-attribute check earns its
+    place: without it, this override would hand back a bogus identity
+    carrying a null value for a required identity attribute instead of
+    omitting identity."""
+
+    seen_identity: Any = None
+
+    @classmethod
+    def get_identity_schema(cls) -> PvsSchema:
+        return IDENTITY_SCHEMA
+
+    @classmethod
+    def get_identity(cls, state: Any) -> dict[str, Any] | None:
+        return {"path": state.path}
+
+
 class DuckTypedResource:
     """Registered by marker attribute alone, with no BaseResource and therefore no
     get_identity_schema(). @register_resource stamps markers and discovery registers on the
@@ -245,6 +266,65 @@ async def test_impl_duck_typed_resource_without_get_identity_schema_still_plans(
     assert not response.diagnostics
     assert not response.HasField("planned_identity")
     assert response.planned_state.msgpack
+
+
+# --- Required-attribute regression coverage (wave-3 dependency refresh) ---
+#
+# cty 0.5's CtyObject.validate no longer refuses a present-but-null value for
+# a required attribute (see pyvider.schema.required); the schema layer's own
+# check has to be wired in explicitly. plan_resource_change.py has two call
+# sites that validate a planned-state dict this provider's own code produced
+# (as opposed to user-supplied config, which is caught earlier at
+# ValidateResourceConfig): _handle_planned_state_dict (line ~208) and
+# _derive_planned_identity_values (line ~239). They have different jobs and
+# so different expected outcomes for the same defect -- see each test below.
+
+
+class _RequiredAttrPlanBug(DuckTypedResource):
+    """A resource whose plan() has a bug: it leaves the required,
+    non-computed 'path' attribute null in the planned state it hands back.
+    This is exactly what cty 0.4 used to catch and cty 0.5 gave up."""
+
+    async def plan(self, ctx: ResourceContext) -> tuple[dict[str, Any], None]:
+        return {"path": None}, None
+
+
+@pytest.mark.asyncio
+async def test_impl_rejects_present_null_required_attribute_in_planned_state() -> None:
+    """_handle_planned_state_dict must fail the plan with a diagnostic, not
+    hand Terraform a planned state with a null required attribute."""
+    with _patched(_RequiredAttrPlanBug):
+        response = await _plan_resource_change_impl(_request(), context=None)
+
+    assert any(d.severity == pb.Diagnostic.ERROR for d in response.diagnostics)
+    assert any("null" in str(d.summary).lower() for d in response.diagnostics)
+    assert any(
+        d.attribute.steps and d.attribute.steps[0].attribute_name == "path" for d in response.diagnostics
+    )
+    assert not response.planned_state.msgpack
+
+
+def test_derive_planned_identity_values_omits_on_present_null_required_attribute() -> None:
+    """_derive_planned_identity_values's own broad except already documents
+    catching 'malformed/incomplete planned-state data' by omitting identity
+    and logging a warning rather than failing the plan (see its docstring
+    and test_impl_omits_planned_identity_when_derivation_raises above).
+
+    BaseResource's *default* get_identity() already null-checks every
+    identity attribute on its own (see its docstring), so it would return
+    None here with or without this function's own required-attribute check
+    -- that combination would not actually prove the check earns its place.
+    IdentityResourceTrustingStateBlindly's override deliberately skips that
+    null-check, the way a resource author's own get_identity() legitimately
+    might: without the check added here, it would hand back
+    `{"path": None}` -- a bogus identity for a required identity attribute --
+    instead of the correct outcome, which is to omit identity.
+    """
+    result = _derive_planned_identity_values(
+        IdentityResourceTrustingStateBlindly, RESOURCE_SCHEMA, {"path": None}, "demo"
+    )
+
+    assert result is None
 
 
 # 🐍🏗️🔚
