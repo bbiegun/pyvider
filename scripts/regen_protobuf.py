@@ -53,6 +53,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 from provide.foundation import perr, pout
 
@@ -106,6 +107,58 @@ def mask_toolchain_versions(text: str) -> str:
     text = PROTOBUF_BANNER_RE.sub(f"# Protobuf Python Version: {MASK}", text)
     text = PROTOBUF_RUNTIME_RE.sub(rf"\g<1>{MASK},", text)
     return GRPC_GENERATED_RE.sub(f"GRPC_GENERATED_VERSION = '{MASK}'", text)
+
+
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
+
+# Which generated stamp corresponds to which declared dependency.
+FLOOR_SOURCES = (
+    ("protobuf", "tfplugin6_pb2.py", PROTOBUF_BANNER_RE),
+    ("grpcio", "tfplugin6_pb2_grpc.py", GRPC_GENERATED_RE),
+)
+
+_VERSION_IN_LINE_RE = re.compile(r"(\d+\.\d+\.\d+)")
+
+
+def extract_generated_versions(out_dir: Path) -> tuple[str, str]:
+    """Return (protobuf_version, grpc_version) as stamped into generated output."""
+    found: list[str] = []
+    for package, filename, pattern in FLOOR_SOURCES:
+        match = pattern.search((out_dir / filename).read_text())
+        version = _VERSION_IN_LINE_RE.search(match.group(0)) if match else None
+        if version is None:
+            raise SystemExit(
+                f"No {package} version stamp found in {filename}; "
+                "protoc output layout changed, update this script."
+            )
+        found.append(version.group(1))
+    return found[0], found[1]
+
+
+def declared_floor(package: str) -> str | None:
+    """Return the >= floor pyproject declares for ``package``, if any."""
+    data = tomllib.loads(PYPROJECT_PATH.read_text())
+    for requirement in data["project"]["dependencies"]:
+        name = re.split(r"[<>=!~\[; ]", requirement.strip())[0]
+        if name == package:
+            floor = re.search(r">=\s*([\d.]+)", requirement)
+            return floor.group(1) if floor else None
+    return None
+
+
+def check_floor_drift(out_dir: Path) -> list[str]:
+    """Return a message per generated stamp that disagrees with its declared floor."""
+    protobuf_version, grpc_version = extract_generated_versions(out_dir)
+    problems = []
+    for package, generated in (("protobuf", protobuf_version), ("grpcio", grpc_version)):
+        floor = declared_floor(package)
+        if floor != generated:
+            problems.append(
+                f"stubs were generated against {package} {generated}, but pyproject "
+                f"declares {package}>={floor}. The generated stubs enforce their "
+                f"version at import, so raise the floor together with the stubs."
+            )
+    return problems
 
 
 def describe_proto_version(proto_path: Path) -> str:
@@ -207,11 +260,15 @@ def main() -> int:
                 if mask_toolchain_versions(p.read_text())
                 != mask_toolchain_versions((PROTO_DIR / p.name).read_text())
             ]
+            drift = check_floor_drift(Path(tmp))
             if stale:
                 perr("Committed stubs are out of date: " + ", ".join(stale))
                 perr("Run: python scripts/regen_protobuf.py")
+            for problem in drift:
+                perr(problem)
+            if stale or drift:
                 return 1
-            pout("Committed stubs are up to date.")
+            pout("Committed stubs are up to date, and declared floors match.")
             return 0
 
         for path in staged:

@@ -51,3 +51,42 @@ def test_masking_preserves_drift_in_unrelated_numbers():
     """Only the known version tokens are masked, not every integer."""
     changed = PB2_SAMPLE.replace("_descriptor_pool.Default()", "_descriptor_pool.Other()")
     assert mask_toolchain_versions(changed) != mask_toolchain_versions(PB2_SAMPLE)
+
+
+import pytest
+
+from scripts.regen_protobuf import (
+    declared_floor,
+    extract_generated_versions,
+)
+
+
+def _write_stub_pair(tmp_path, protobuf_version: str, grpc_version: str):
+    """Write a minimal generated-stub pair carrying the given versions."""
+    pb2 = PB2_SAMPLE.replace("7.35.1", protobuf_version)
+    grpc = GRPC_SAMPLE.replace("1.83.0", grpc_version)
+    (tmp_path / "tfplugin6_pb2.py").write_text(pb2)
+    (tmp_path / "tfplugin6_pb2_grpc.py").write_text(grpc)
+    return tmp_path
+
+
+def test_extract_generated_versions_reads_both_stamps(tmp_path):
+    out = _write_stub_pair(tmp_path, "7.36.0", "1.84.0")
+    assert extract_generated_versions(out) == ("7.36.0", "1.84.0")
+
+
+def test_extract_generated_versions_rejects_missing_stamp(tmp_path):
+    (tmp_path / "tfplugin6_pb2.py").write_text("no banner here\n")
+    (tmp_path / "tfplugin6_pb2_grpc.py").write_text(GRPC_SAMPLE)
+    with pytest.raises(SystemExit):
+        extract_generated_versions(tmp_path)
+
+
+def test_declared_floor_reads_pyproject():
+    """The real pyproject must declare floors for both packages."""
+    assert declared_floor("protobuf") is not None
+    assert declared_floor("grpcio") is not None
+
+
+def test_declared_floor_returns_none_for_absent_package():
+    assert declared_floor("definitely-not-a-dependency") is None
