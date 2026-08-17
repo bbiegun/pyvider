@@ -17,9 +17,11 @@ from pyvider.schema import a_str, s_identity
 MODULE = "pyvider.protocols.tfprotov6.handlers.get_resource_identity_schemas"
 
 
-def _resource_with_identity() -> MagicMock:
+def _resource_with_identity(version: int = 0) -> MagicMock:
     cls = MagicMock()
-    cls.get_identity_schema.return_value = s_identity(attributes={"path": a_str(required=True)})
+    cls.get_identity_schema.return_value = s_identity(
+        attributes={"path": a_str(required=True)}, version=version
+    )
     return cls
 
 
@@ -47,13 +49,15 @@ async def test_includes_only_resources_declaring_identity() -> None:
 
 @pytest.mark.asyncio
 async def test_converts_the_identity_schema() -> None:
-    with patch(f"{MODULE}.get_all_components", return_value={"demo": _resource_with_identity()}):
+    """Uses a non-default version so the assertion distinguishes a carried value from
+    protobuf's zero default -- identity versions start at 0."""
+    with patch(f"{MODULE}.get_all_components", return_value={"demo": _resource_with_identity(version=2)}):
         response = await GetResourceIdentitySchemasHandler(
             pb.GetResourceIdentitySchemas.Request(), context=None
         )
 
     schema = response.identity_schemas["demo"]
-    assert schema.version == 1
+    assert schema.version == 2
     assert [a.name for a in schema.identity_attributes] == ["path"]
     assert schema.identity_attributes[0].required_for_import is True
 

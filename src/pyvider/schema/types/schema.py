@@ -17,13 +17,25 @@ from pyvider.schema.types.object import PvsObjectType
 
 
 def _validate_version(instance: object, attribute: object, value: int) -> None:
-    """Reject schema versions below 1.
+    """Reject negative schema versions.
+
+    Zero is valid, and deliberately so. Terraform stores a resource's schema
+    version in state (``SchemaVersion`` on
+    ``internal/states/instance_object_src.go``) and it defaults to 0 for any
+    instance written before the provider started versioning -- Terraform's own
+    built-in ``terraform_data`` resource declares ``Version: 0``
+    (``internal/builtin/providers/terraform/resource_data.go:66``), and
+    ``schema_version: 0`` appears throughout its state round-trip fixtures. The
+    identity version has the same floor: the protocol says identity
+    "versioning implicitly starts at 0"
+    (``docs/plugin-protocol/tfplugin6.proto``). Only negative versions are
+    unrepresentable.
 
     Replaces a lambda that returned a bool. attrs signals validation failure by
     raising and discards return values, so the original enforced nothing.
     """
-    if value < 1:
-        raise PvsSchemaDefinitionError(f"Schema version must be 1 or greater, got {value}.")
+    if value < 0:
+        raise PvsSchemaDefinitionError(f"Schema version must be 0 or greater, got {value}.")
 
 
 @define(frozen=True, kw_only=True)

@@ -36,6 +36,15 @@ def _request(version: int) -> pb.UpgradeResourceIdentity.Request:
     )
 
 
+def _empty_request(version: int) -> pb.UpgradeResourceIdentity.Request:
+    """What Terraform actually sends for an instance predating identity: version 0
+    and no stored identity data at all. `internal/terraform/upgrade_resource_state.go`
+    forwards `src.IdentityJSON` with no emptiness guard."""
+    return pb.UpgradeResourceIdentity.Request(
+        type_name="demo", version=version, raw_identity=pb.RawState(json=b"")
+    )
+
+
 @pytest.mark.asyncio
 async def test_passes_through_when_version_matches() -> None:
     resource = _resource()
@@ -76,6 +85,41 @@ async def test_errors_when_resource_declares_no_identity() -> None:
     assert len(response.diagnostics) == 1
     assert response.diagnostics[0].severity == pb.Diagnostic.ERROR
     assert "identity" in response.diagnostics[0].summary.lower()
+
+
+# --- Adopting identity on a resource that already has instances in state ---
+
+
+@pytest.mark.asyncio
+async def test_empty_raw_identity_leaves_upgraded_identity_unset() -> None:
+    """Every instance predating identity carries IdentitySchemaVersion 0 and no identity
+    data. If the provider raised its identity version, Terraform calls this RPC with an
+    empty payload; marshalling that would fail on the required attribute and abort the
+    plan. Leaving the field unset makes Terraform read cty.NullVal, which it accepts."""
+    resource = _resource()
+
+    with patch(f"{MODULE}.hub.get_component", return_value=resource):
+        response = await UpgradeResourceIdentityHandler(_empty_request(version=0), context=None)
+
+    assert not response.diagnostics
+    assert not response.HasField("upgraded_identity")
+    resource.upgrade_identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_version_zero_schema_makes_adoption_a_no_op() -> None:
+    """The actual fix for first-time adoption: s_identity() defaults to version 0, which
+    equals what is already in state, so the versions match and the hook is never called."""
+    schema = s_identity(attributes={"path": a_str(required=True)})
+    assert schema.version == 0
+    resource = _resource(schema=schema)
+
+    with patch(f"{MODULE}.hub.get_component", return_value=resource):
+        response = await UpgradeResourceIdentityHandler(_empty_request(version=0), context=None)
+
+    assert not response.diagnostics
+    assert not response.HasField("upgraded_identity")
+    resource.upgrade_identity.assert_not_awaited()
 
 
 # 🐍🏗️🔚

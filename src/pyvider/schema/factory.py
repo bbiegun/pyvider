@@ -172,7 +172,7 @@ def s_provider(
 
 def s_identity(
     attributes: dict[str, PvsAttribute] | None = None,
-    version: int = 1,
+    version: int = 0,
 ) -> PvsSchema:
     """Create a resource identity schema.
 
@@ -181,8 +181,17 @@ def s_identity(
     `optional` becomes `optional_for_import` -- the same collapse Terraform
     core performs in ProtoToIdentitySchema.
 
-    Identity versions start at 1 and increment by 1 on each change; the floor is
-    enforced by PvsSchema.version.
+    Identity versions start at 0 and increment by 1 on each change. The default
+    of 0 is load-bearing, not cosmetic: Terraform records
+    `IdentitySchemaVersion` in state and it is 0 for every instance written
+    before the resource declared identity
+    (`internal/states/instance_object_src.go`). A resource adopting identity at
+    version 0 therefore matches what is already in state and never triggers
+    `UpgradeResourceIdentity`; adopting at version 1 would fire the upgrade RPC
+    for every pre-existing instance with an *empty* stored identity. The
+    protocol states the same rule directly -- identity "versioning implicitly
+    starts at 0 and by convention should be incremented by 1 each change"
+    (`docs/plugin-protocol/tfplugin6.proto`, `ResourceIdentitySchema.version`).
 
     Identity attributes must be flat scalars and must not set computed or
     sensitive; both are enforced in pvs_identity_schema_to_proto.

@@ -110,11 +110,30 @@ What reuse gives up, and how each is handled:
   `computed` is the one that would otherwise do something: `to_cty_type()` folds
   it into the optional set, so a stray `computed=True` would silently alter the
   identity object type.
-- **`version` validates `> 0`, while the proto says identity versioning
-  "implicitly starts at 0".** Identity versions default to 1 and increment from
-  there. Terraform only compares identity versions for equality when deciding
-  whether to call `UpgradeResourceIdentity`, so the starting number is a
-  provider-internal convention; only self-consistency matters.
+- **`PvsSchema.version` used to validate `> 0`, which was wrong for every
+  schema, not just identity.** That floor is relaxed to `>= 0`. Terraform stores
+  a resource's schema version in state and it defaults to 0 — its own built-in
+  `terraform_data` resource declares `Version: 0`
+  (`internal/builtin/providers/terraform/resource_data.go:66`), and
+  `schema_version: 0` appears throughout the state round-trip fixtures under
+  `internal/states/statefile/testdata/roundtrip/`. Only negative versions are
+  rejected.
+- **Identity versions start at 0, and `s_identity()` defaults to 0.** The proto
+  says so directly — identity "versioning implicitly starts at 0 and by
+  convention should be incremented by 1 each change"
+  (`docs/plugin-protocol/tfplugin6.proto`, `ResourceIdentitySchema.version`) —
+  and the starting number is *not* merely a provider-internal convention.
+  Terraform persists `IdentitySchemaVersion` in state
+  (`internal/states/instance_object_src.go`), and it is 0 for every instance
+  written before the resource declared identity. `upgradeResourceIdentity`
+  returns early only when the stored version equals the schema's; otherwise it
+  calls `UpgradeResourceIdentity` with `Version: 0` and an empty
+  `RawIdentityJSON`, on every state read
+  (`internal/terraform/upgrade_resource_state.go`,
+  `internal/terraform/node_resource_abstract.go`). Defaulting to 1 would fire
+  that RPC with no data to upgrade for every pre-existing instance. Defaulting
+  to 0 means adopting identity on a live resource is a no-op at the protocol
+  level.
 
 ### Factory helpers
 
@@ -126,10 +145,12 @@ exported from `pyvider.schema`. Identity attributes are built with the existing
 @classmethod
 def get_identity_schema(cls) -> PvsSchema:
     return s_identity(
-        version=1,
         attributes={"path": a_str(required=True)},
     )
 ```
+
+`version` defaults to 0 and is normally omitted; pass it only when the identity
+shape actually changes.
 
 `required` here reads as `required_for_import`, and that is not a reinterpretation
 pyvider invents — Terraform core performs the same collapse. `ProtoToIdentitySchema`
@@ -227,7 +248,13 @@ Two new handlers, following the existing `@rpc_handler` +
 - **`upgrade_resource_identity.py`** — decodes `raw_identity` (JSON, per the
   proto), passes through unchanged when `request.version` equals the resource's
   current identity version, and otherwise calls `upgrade_identity()`. Mirrors
-  the existing `UpgradeResourceState` passthrough shape.
+  the existing `UpgradeResourceState` passthrough shape. An **empty**
+  `raw_identity` returns with `upgraded_identity` left unset rather than
+  marshalling `{}`, which would fail on the first required attribute. Terraform
+  reads a nil `UpgradedIdentity` as `cty.NullVal(ty)`
+  (`internal/plugin6/grpc_provider.go:485`); that is wholly known, conforms to
+  the identity type, and `CompleteIdentityUpgrade` stores it and stamps the
+  current version.
 
 Three modified handlers. Each reads inbound identity into `ResourceContext` and
 writes derived identity onto the response, guarded on the resource declaring an
@@ -276,7 +303,22 @@ appended to `response.diagnostics`, never raised across the RPC boundary.
 Identity-specific cases:
 
 - **Resource declares identity, derivation returns `None`** — omit the identity
-  field. Not an error; Terraform treats absent identity as "unchanged".
+  field. Not an error, and omission is *required* when the value is not wholly
+  known, because Terraform rejects an identity containing unknowns
+  (`validateIdentityKnown`, `internal/terraform/node_resource_abstract_instance.go`).
+
+  But omission does **not** mean "unchanged". Terraform assigns identity from
+  the response unconditionally — `ret.Identity = resp.Identity` after refresh,
+  `Identity: resp.PlannedIdentity` on plan, and `Identity: resp.NewIdentity` on
+  both apply branches (`node_resource_abstract_instance.go:810`, `:1407`,
+  `:2931`, `:2949`) — so an omitted identity is written to state as nil.
+  Omitting **clears** identity rather than preserving it.
+
+  The consequence worth recording: a resource whose identity is legitimately
+  `None` for some instances will have identity cleared from state on the next
+  refresh. That is a known property of omission, not something this design
+  fixes. It is also why identity should be derivable from state for every
+  instance a resource manages, rather than only some.
 - **Identity fails to marshal** (wrong type for the declared attribute) — error
   diagnostic naming the resource type and attribute. This is a provider bug and
   should be loud.

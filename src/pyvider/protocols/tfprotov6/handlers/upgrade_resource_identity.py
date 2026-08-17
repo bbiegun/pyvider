@@ -24,6 +24,13 @@ async def UpgradeResourceIdentityHandler(
     return await _upgrade_resource_identity_impl(request, context)
 
 
+def _error_response(summary: str, detail: str) -> pb.UpgradeResourceIdentity.Response:
+    """Build a single-ERROR-diagnostic response."""
+    return pb.UpgradeResourceIdentity.Response(
+        diagnostics=[pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=summary, detail=detail)]
+    )
+
+
 async def _upgrade_resource_identity_impl(
     request: pb.UpgradeResourceIdentity.Request, context: Any
 ) -> pb.UpgradeResourceIdentity.Response:
@@ -32,44 +39,52 @@ async def _upgrade_resource_identity_impl(
     raw_identity is JSON-encoded per the proto. When the stored version already
     matches, the data passes through untouched -- the same shape as the
     existing UpgradeResourceState passthrough.
+
+    Empty raw_identity is a first-class case, not a malformed request. Terraform
+    calls this RPC whenever the stored IdentitySchemaVersion differs from the
+    schema's, with no guard on the stored identity being present
+    (`internal/terraform/upgrade_resource_state.go`), so a resource that raises
+    its identity version while instances still carry no identity data at all
+    arrives here with an empty payload. Marshalling that would fail on the first
+    required attribute and abort every plan and refresh. Leaving
+    upgraded_identity unset is the correct answer: Terraform reads a nil
+    UpgradedIdentity as `cty.NullVal(ty)`
+    (`internal/plugin6/grpc_provider.go`), which is wholly known, conforms to
+    the identity type, and is accepted by CompleteIdentityUpgrade.
     """
     response = pb.UpgradeResourceIdentity.Response()
 
     try:
         resource_class = hub.get_component("resource", request.type_name)
         if not resource_class:
-            return pb.UpgradeResourceIdentity.Response(
-                diagnostics=[
-                    pb.Diagnostic(
-                        severity=pb.Diagnostic.ERROR,
-                        summary=f"Unknown resource type '{request.type_name}'",
-                        detail=(
-                            f"Resource type '{request.type_name}' is not registered.\n\n"
-                            "Suggestion: Ensure the resource is registered using the "
-                            "@register_resource decorator and that component discovery "
-                            "has completed successfully."
-                        ),
-                    )
-                ]
+            return _error_response(
+                f"Unknown resource type '{request.type_name}'",
+                f"Resource type '{request.type_name}' is not registered.\n\n"
+                "Suggestion: Ensure the resource is registered using the "
+                "@register_resource decorator and that component discovery "
+                "has completed successfully.",
             )
 
         schema = resource_class.get_identity_schema()
         if schema is None:
-            return pb.UpgradeResourceIdentity.Response(
-                diagnostics=[
-                    pb.Diagnostic(
-                        severity=pb.Diagnostic.ERROR,
-                        summary=f"Resource '{request.type_name}' declares no identity schema",
-                        detail=(
-                            "Terraform asked to upgrade identity data for a resource that "
-                            "does not declare an identity schema. This is a bug in the "
-                            "provider: implement get_identity_schema() on the resource."
-                        ),
-                    )
-                ]
+            return _error_response(
+                f"Resource '{request.type_name}' declares no identity schema",
+                "Terraform asked to upgrade identity data for a resource that "
+                "does not declare an identity schema. This is a bug in the "
+                "provider: implement get_identity_schema() on the resource.",
             )
 
-        raw_identity = json.loads(request.raw_identity.json) if request.raw_identity.json else {}
+        if not request.raw_identity.json:
+            logger.info(
+                "No stored identity data to upgrade, leaving identity unset",
+                operation="upgrade_resource_identity",
+                resource_type=request.type_name,
+                from_version=request.version,
+                to_version=schema.version,
+            )
+            return response
+
+        raw_identity = json.loads(request.raw_identity.json)
 
         if request.version == schema.version:
             logger.debug(
