@@ -62,13 +62,11 @@ Issues = "https://github.com/provide-io/pyvider/issues"
 [dependency-groups]
 dev = [
     "provide-testkit[pyvider-dev]>=0.4.0",
-    # Pinned exactly, not floored: scripts/regen_protobuf.py --check byte-compares
-    # regenerated output against the committed stubs, and that output embeds the
-    # generating toolchain's version in its banners. Any grpcio-tools version drift
-    # makes the check report the stubs as out of date over pure banner churn. It
-    # arrives transitively via provide-testkit[pyvider-dev]; this pin makes it
-    # explicit so a routine testkit refresh cannot move it silently.
-    "grpcio-tools==1.83.0",
+    # Floor only. scripts/regen_protobuf.py --check compares stub content with
+    # toolchain version stamps masked, and checks those stamps separately against
+    # the grpcio/protobuf floors declared above, so a newer grpcio-tools no longer
+    # reports the stubs as stale over banner churn.
+    "grpcio-tools>=1.83.0",
 ]
 docs = [
     "provide-testkit[docs]>=0.4.0",

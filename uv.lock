@@ -3521,7 +3521,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "grpcio-tools", specifier = "==1.83.0" },
+    { name = "grpcio-tools", specifier = ">=1.83.0" },
     { name = "provide-testkit", extras = ["pyvider-dev"], editable = "../provide-testkit" },
 ]
 docs = [{ name = "provide-testkit", extras = ["docs"], editable = "../provide-testkit" }]

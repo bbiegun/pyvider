@@ -25,11 +25,13 @@ hand:
     in place -- it records which protobuf/grpcio gencode version produced the
     file, which matters when chasing wire-format differences.
 
-``--check`` is therefore toolchain-version-sensitive, not just proto-sensitive:
-it byte-compares regenerated output against the committed stubs, and those
-version banners are part of the bytes. A different ``grpcio-tools`` would make it
-report "stubs are out of date" over nothing but banner churn, so ``grpcio-tools``
-is pinned exactly (not floored) in the ``dev`` dependency group. Bump that pin and
+``--check`` makes two independent comparisons. It compares regenerated output
+against the committed stubs with the generator's version stamps masked, so a
+newer ``grpcio-tools`` cannot report "stubs are out of date" over banner churn
+alone; and it compares those masked stamps against the ``grpcio`` and
+``protobuf`` floors declared in ``pyproject.toml``, because the generated code
+enforces them at import. A toolchain upgrade that moves a floor therefore fails
+with a named mismatch rather than being silently absorbed -- raise the floors and
 regenerate in the same change.
 
 Usage::
