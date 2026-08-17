@@ -249,8 +249,42 @@ class TestValidateProviderConfigRequiredAttributeRegression:
             response = await _validate_provider_config_impl(request, context=None)
 
             assert len(response.diagnostics) > 0
-            assert any("null" in str(d.detail).lower() for d in response.diagnostics)
-            assert any("name" in str(d.detail).lower() for d in response.diagnostics)
+            # The diagnostic now goes through create_diagnostic_from_exception
+            # (see test_impl_rejects_present_null_required_attribute_has_attribute_path
+            # below), which puts the CtyAttributeValidationError's own message
+            # in `summary` rather than folding it into a generic detail string.
+            assert any("null" in str(d.summary).lower() for d in response.diagnostics)
+
+    @pytest.mark.asyncio
+    async def test_impl_rejects_present_null_required_attribute_has_attribute_path(self) -> None:
+        """The diagnostic must carry an attribute path, not just a message string.
+
+        Mirrors test_handler_rejects_present_null_required_attribute in
+        test_validate_resource_config.py. Before the fix, the
+        CtyAttributeValidationError raised by check_required_attributes fell
+        through to this handler's generic `except Exception`, which builds a
+        string-only diagnostic and never populates `Diagnostic.attribute` --
+        so Terraform had no way to point the practitioner at the offending
+        argument, unlike the equivalent resource/data-source diagnostics.
+        """
+        from pyvider.schema import a_str, s_provider
+
+        mock_provider = MagicMock()
+        mock_provider.schema = s_provider({"name": a_str(required=True)})
+
+        with patch("pyvider.protocols.tfprotov6.handlers.validate_provider_config.hub") as mock_hub:
+            mock_hub.get_component.return_value = mock_provider
+
+            request = pb.ValidateProviderConfig.Request()
+            request.config.msgpack = b"\x81\xa4name\xc0"
+
+            response = await _validate_provider_config_impl(request, context=None)
+
+            assert len(response.diagnostics) > 0
+            assert any(
+                d.attribute.steps and d.attribute.steps[0].attribute_name == "name"
+                for d in response.diagnostics
+            )
 
 
 class TestValidateProviderConfigEdgeCases:
