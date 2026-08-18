@@ -13,6 +13,7 @@ from attrs import define, field
 from provide.foundation import logger
 
 from pyvider.observability import handler_duration, handler_errors, handler_requests
+from pyvider.protocols.tfprotov6.handlers.list_resource import stream_list_resource
 from pyvider.protocols.tfprotov6.handlers.state_store_handlers import (
     read_state_bytes,
     state_store_chunk_size,
@@ -312,15 +313,11 @@ class ProviderHandler(ProviderServicer):
                 "ListResource RPC received",
                 operation="list_resource",
                 request_type=request.type_name,
+                include_resource_object=request.include_resource_object,
+                limit=request.limit,
             )
-            logger.info(
-                "ListResource completed with no results",
-                operation="list_resource",
-                request_type=request.type_name,
-            )
-            if False:  # keep async generator contract while producing no events
-                yield pb.ListResource.Event()  # pragma: no cover
-            return
+            async for event in stream_list_resource(request, context):
+                yield event
         except Exception:
             handler_errors.inc(handler="ListResource")
             raise

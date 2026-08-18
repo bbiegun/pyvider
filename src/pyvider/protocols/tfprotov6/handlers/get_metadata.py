@@ -89,6 +89,19 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=name,
             )
 
+        # List resources registered via @register_list_resource answer the
+        # ListResource RPC; Terraform only calls it for advertised type names.
+        all_list_resources = get_filtered_components("list_resource")
+        list_resources = []
+        for name in all_list_resources:
+            list_resources.append(pb.GetMetadata.ListResourceMetadata(type_name=name))
+            logger.debug(
+                "List resource discovered during metadata collection",
+                operation="get_metadata",
+                component_type="list_resource",
+                component_name=name,
+            )
+
         logger.info(
             "GetMetadata completed successfully",
             operation="get_metadata",
@@ -97,6 +110,7 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
             function_count=len(functions),
             ephemeral_resource_count=len(ephemeral_resources),
             state_store_count=len(state_stores),
+            list_resource_count=len(list_resources),
         )
 
         response = pb.GetMetadata.Response(
@@ -110,7 +124,7 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
             data_sources=data_sources,
             functions=functions,
             ephemeral_resources=ephemeral_resources,
-            list_resources=[],
+            list_resources=list_resources,
             state_stores=state_stores,
             actions=[],
             diagnostics=[],

@@ -93,6 +93,12 @@ async def _collect_ephemeral_resource_schemas(
     return await _collect_schemas("ephemeral_resource", diagnostics)
 
 
+async def _collect_list_resource_schemas(
+    diagnostics: list[pb.Diagnostic],
+) -> dict[str, pb.Schema]:
+    return await _collect_schemas("list_resource", diagnostics)
+
+
 async def _collect_state_store_schemas(
     diagnostics: list[pb.Diagnostic],
 ) -> dict[str, pb.Schema]:
@@ -195,6 +201,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
         data_source_schemas = await _collect_data_source_schemas(diagnostics)
         functions = await _collect_function_schemas(diagnostics)
         ephemeral_resource_schemas = await _collect_ephemeral_resource_schemas(diagnostics)
+        list_resource_schemas = await _collect_list_resource_schemas(diagnostics)
         state_store_schemas = await _collect_state_store_schemas(diagnostics)
 
         response = pb.GetProviderSchema.Response(
@@ -203,6 +210,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
             data_source_schemas=data_source_schemas,
             functions=functions,
             ephemeral_resource_schemas=ephemeral_resource_schemas,
+            list_resource_schemas=list_resource_schemas,
             state_store_schemas=state_store_schemas,
             diagnostics=diagnostics,
         )
@@ -215,6 +223,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
             data_source_count=len(data_source_schemas),
             function_count=len(functions),
             ephemeral_resource_count=len(ephemeral_resource_schemas),
+            list_resource_count=len(list_resource_schemas),
             state_store_count=len(state_store_schemas),
             warning_count=len([d for d in diagnostics if d.severity == pb.Diagnostic.WARNING]),
         )
