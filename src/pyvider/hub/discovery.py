@@ -131,7 +131,29 @@ class ComponentDiscovery:
                 continue
 
             if inspect.isclass(obj) and inspect.isabstract(obj):
-                logger.debug("Skipping abstract class", class_name=obj.__name__)
+                # A class carrying a registration marker but still abstract is a
+                # provider that forgot a hook, not framework scaffolding. Skipping it
+                # quietly makes the component vanish from the schema with nothing to
+                # read: terraform reports "invalid data source type", pointing at the
+                # config rather than the missing method.
+                if any(
+                    getattr(obj, marker, False)
+                    for marker in (
+                        "_is_registered_provider",
+                        "_is_registered_resource",
+                        "_is_registered_data_source",
+                        "_is_registered_function",
+                        "_is_registered_capability",
+                    )
+                ):
+                    logger.warning(
+                        "Registered component is abstract and was NOT registered",
+                        component_name=getattr(obj, "_registered_name", obj.__name__),
+                        class_name=obj.__name__,
+                        missing=sorted(getattr(obj, "__abstractmethods__", ())),
+                    )
+                else:
+                    logger.debug("Skipping abstract class", class_name=obj.__name__)
                 continue
 
             reg_checks = [

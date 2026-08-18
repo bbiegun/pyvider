@@ -71,11 +71,11 @@ from pyvider.providers import BaseProvider
 from pyvider.exceptions import ProviderConfigurationError
 
 class MyProvider(BaseProvider):
-    async def configure(self, config: dict) -> None:
-        if not config.get("api_key"):
+    async def configure(self, config: Any) -> None:
+        if not config.api_key:
             raise ProviderConfigurationError("api_key is required")
 
-        if not config["api_key"].startswith("sk_"):
+        if not config.api_key.startswith("sk_"):
             raise ProviderConfigurationError("Invalid API key format")
 
         try:
