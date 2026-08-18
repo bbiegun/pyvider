@@ -13,14 +13,15 @@ from attrs import define, field
 from provide.foundation import logger
 
 from pyvider.observability import handler_duration, handler_errors, handler_requests
-from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import (
-    _get_state_bytes,
-    _get_state_store_chunk_size,
-    _store_state_bytes,
+from pyvider.protocols.tfprotov6.handlers.state_store_handlers import (
+    read_state_bytes,
+    state_store_chunk_size,
+    write_state_bytes,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.protocols.tfprotov6.protobuf import ProviderServicer
 from pyvider.providers.base import BaseProvider
+from pyvider.state_stores import StateStoreError
 
 
 @define
@@ -332,8 +333,28 @@ class ProviderHandler(ProviderServicer):
         start = time.perf_counter()
         handler_requests.inc(handler="ReadStateBytes")
         try:
-            state_bytes = _get_state_bytes(request.type_name, request.state_id) or b""
-            chunk_size = max(1, _get_state_store_chunk_size(request.type_name))
+            try:
+                state_bytes = await read_state_bytes(request.type_name, request.state_id) or b""
+            except StateStoreError as exc:
+                logger.error(
+                    "ReadStateBytes failed to load state",
+                    operation="read_state_bytes",
+                    state_store_type=request.type_name,
+                    state_id=request.state_id,
+                    error_message=str(exc),
+                )
+                yield pb.ReadStateBytes.Response(
+                    total_length=0,
+                    diagnostics=[
+                        pb.Diagnostic(
+                            severity=pb.Diagnostic.ERROR,
+                            summary="ReadStateBytes could not load state",
+                            detail=str(exc),
+                        )
+                    ],
+                )
+                return
+            chunk_size = max(1, state_store_chunk_size(request.type_name))
 
             logger.debug(
                 "ReadStateBytes RPC received",
@@ -394,7 +415,25 @@ class ProviderHandler(ProviderServicer):
                 )
 
             state = bytes(state_chunks)
-            _store_state_bytes(state_store_type, state_id, state)
+            try:
+                await write_state_bytes(state_store_type, state_id, state)
+            except StateStoreError as exc:
+                logger.error(
+                    "WriteStateBytes failed to persist state",
+                    operation="write_state_bytes",
+                    state_store_type=state_store_type,
+                    state_id=state_id,
+                    error_message=str(exc),
+                )
+                return pb.WriteStateBytes.Response(
+                    diagnostics=[
+                        pb.Diagnostic(
+                            severity=pb.Diagnostic.ERROR,
+                            summary="WriteStateBytes could not persist state",
+                            detail=str(exc),
+                        )
+                    ]
+                )
 
             diagnostics: list[pb.Diagnostic] = []
             if expected_total_length and expected_total_length != len(state):

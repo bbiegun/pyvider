@@ -76,6 +76,19 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=name,
             )
 
+        # State stores registered via @register_state_store back the pluggable
+        # remote-state RPCs; Terraform needs them advertised to route those calls.
+        all_state_stores = get_filtered_components("state_store")
+        state_stores = []
+        for name in all_state_stores:
+            state_stores.append(pb.GetMetadata.StateStoreMetadata(type_name=name))
+            logger.debug(
+                "State store discovered during metadata collection",
+                operation="get_metadata",
+                component_type="state_store",
+                component_name=name,
+            )
+
         logger.info(
             "GetMetadata completed successfully",
             operation="get_metadata",
@@ -83,6 +96,7 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
             data_source_count=len(data_sources),
             function_count=len(functions),
             ephemeral_resource_count=len(ephemeral_resources),
+            state_store_count=len(state_stores),
         )
 
         response = pb.GetMetadata.Response(
@@ -97,7 +111,7 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
             functions=functions,
             ephemeral_resources=ephemeral_resources,
             list_resources=[],
-            state_stores=[],
+            state_stores=state_stores,
             actions=[],
             diagnostics=[],
         )

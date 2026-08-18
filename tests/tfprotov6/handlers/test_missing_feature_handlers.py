@@ -18,9 +18,9 @@ from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import (
     ValidateActionConfigHandler,
     ValidateListResourceConfigHandler,
     ValidateStateStoreConfigHandler,
-    _list_state_ids,
-    _reset_state_store_state_for_tests,
-    _store_state_bytes,
+    list_state_ids,
+    reset_state_stores,
+    write_state_bytes,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 
@@ -28,7 +28,7 @@ import pyvider.protocols.tfprotov6.protobuf as pb
 @pytest.fixture(autouse=True)
 def _reset_state_store() -> None:
     """Ensure tests that use shared in-memory state store state stay isolated."""
-    _reset_state_store_state_for_tests()
+    reset_state_stores()
 
 
 def _assert_no_diagnostics(response_diag: list[pb.Diagnostic]) -> None:
@@ -127,8 +127,8 @@ async def test_unlock_state_releases_lock_and_no_diagnostics() -> None:
 
 @pytest.mark.asyncio
 async def test_get_states_returns_state_ids_by_type() -> None:
-    _store_state_bytes("s3", "first", b"state")
-    _store_state_bytes("s3", "second", b"state")
+    await write_state_bytes("s3", "first", b"state")
+    await write_state_bytes("s3", "second", b"state")
 
     request = pb.GetStates.Request(type_name="s3")
     response = await GetStatesHandler(request, context=None)
@@ -151,7 +151,7 @@ async def test_get_states_returns_empty_list_when_unknown_store() -> None:
 
 @pytest.mark.asyncio
 async def test_delete_state_removes_state_and_no_diagnostics() -> None:
-    _store_state_bytes("s3", "state-id", b"state")
+    await write_state_bytes("s3", "state-id", b"state")
 
     request = pb.DeleteState.Request(type_name="s3", state_id="state-id")
 
@@ -159,4 +159,4 @@ async def test_delete_state_removes_state_and_no_diagnostics() -> None:
 
     assert isinstance(response, pb.DeleteState.Response)
     _assert_no_diagnostics(response.diagnostics)
-    assert "state-id" not in _list_state_ids("s3")
+    assert "state-id" not in await list_state_ids("s3")

@@ -10,14 +10,14 @@ from collections.abc import AsyncIterator
 import pytest
 
 from pyvider.handler import ProviderHandler
-from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import _reset_state_store_state_for_tests
+from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import reset_state_stores
 import pyvider.protocols.tfprotov6.protobuf as pb
 
 
 @pytest.fixture(autouse=True)
 def _reset_state_store() -> None:
     """Ensure state-store behavior tests are deterministic."""
-    _reset_state_store_state_for_tests()
+    reset_state_stores()
 
 
 @pytest.mark.asyncio

@@ -93,6 +93,33 @@ async def _collect_ephemeral_resource_schemas(
     return await _collect_schemas("ephemeral_resource", diagnostics)
 
 
+async def _collect_state_store_schemas(
+    diagnostics: list[pb.Diagnostic],
+) -> dict[str, pb.Schema]:
+    """Convert the schemas of registered state stores.
+
+    A state store may legitimately take no configuration, in which case
+    ``get_schema()`` returns None and the store is simply omitted from the
+    schema map rather than contributing an empty block.
+    """
+    schemas: dict[str, pb.Schema] = {}
+    for name, component in get_filtered_components("state_store").items():
+        try:
+            schema_obj = component.get_schema()
+            if schema_obj is None:
+                continue
+            schemas[name] = await pvs_schema_to_proto(schema_obj)
+        except Exception as e:
+            diagnostics.append(
+                pb.Diagnostic(
+                    severity=pb.Diagnostic.WARNING,
+                    summary=f"Schema collection error for state_store '{name}'",
+                    detail=str(e),
+                )
+            )
+    return schemas
+
+
 async def _compute_schema_once() -> pb.GetProviderSchema.Response:
     """
     The core, expensive computation logic for building the provider schema.
@@ -168,6 +195,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
         data_source_schemas = await _collect_data_source_schemas(diagnostics)
         functions = await _collect_function_schemas(diagnostics)
         ephemeral_resource_schemas = await _collect_ephemeral_resource_schemas(diagnostics)
+        state_store_schemas = await _collect_state_store_schemas(diagnostics)
 
         response = pb.GetProviderSchema.Response(
             provider=provider_proto_schema,
@@ -175,6 +203,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
             data_source_schemas=data_source_schemas,
             functions=functions,
             ephemeral_resource_schemas=ephemeral_resource_schemas,
+            state_store_schemas=state_store_schemas,
             diagnostics=diagnostics,
         )
 
@@ -186,6 +215,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
             data_source_count=len(data_source_schemas),
             function_count=len(functions),
             ephemeral_resource_count=len(ephemeral_resource_schemas),
+            state_store_count=len(state_store_schemas),
             warning_count=len([d for d in diagnostics if d.severity == pb.Diagnostic.WARNING]),
         )
 
