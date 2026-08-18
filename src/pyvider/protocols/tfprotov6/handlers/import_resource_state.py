@@ -6,8 +6,11 @@
 
 from typing import Any
 
+import attrs
+import msgpack  # type: ignore[import-untyped]
 from provide.foundation import logger
 
+from pyvider.common.encryption import encrypt
 from pyvider.conversion import marshal
 from pyvider.exceptions import ResourceError
 from pyvider.hub import hub
@@ -34,8 +37,9 @@ async def _import_resource_state_impl(
 ) -> pb.ImportResourceState.Response:
     """Adopt an object that already exists into Terraform state.
 
-    A resource participates by implementing `import_state(ctx, id) -> state | None`;
-    the framework marshals whatever it returns through the resource schema.
+    A resource participates by implementing `import_state(ctx, id) -> state | None`,
+    or `-> (state, private_state) | None` when it keeps private state; the framework
+    marshals whatever it returns through the resource schema.
 
     `read()` is deliberately not used as a fallback: read is given prior state,
     while import is given an ID STRING and must locate the object from that alone.
@@ -103,6 +107,17 @@ async def _import_resource_state_impl(
 
         imported = await import_state(resource_context, request.id)
 
+        # A resource that keeps private state may return it alongside the state,
+        # the same (state, private_state) shape the plan and apply hooks use.
+        # Terraform hands ImportedResource.private straight back as
+        # ReadResourceRequest.Private, and read_resource.py gates on it being
+        # non-empty -- so without this, the first refresh after an import sees no
+        # private state at all and the resource cannot tell that apart from
+        # never having had any.
+        imported_private = None
+        if isinstance(imported, tuple):
+            imported, imported_private = imported
+
         if imported is None:
             # "Not found" and "cannot import" are different answers; Terraform has a
             # specific message for the first, and conflating them misdirects the reader.
@@ -127,7 +142,11 @@ async def _import_resource_state_impl(
             type_name=request.type_name,
         )
         imported_resource.state.msgpack = marshalled.msgpack
-        imported_resource.private = b""
+        imported_resource.private = (
+            encrypt(msgpack.packb(attrs.asdict(imported_private), use_bin_type=True))
+            if imported_private is not None
+            else b""
+        )
         response.imported_resources.append(imported_resource)
 
         logger.info(
