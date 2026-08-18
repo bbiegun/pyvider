@@ -12,6 +12,7 @@ from provide.foundation import logger
 
 from pyvider.common.encryption import encrypt
 from pyvider.conversion import marshal
+from pyvider.conversion.identity import marshal_identity, unmarshal_identity
 from pyvider.exceptions import ResourceError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
@@ -19,6 +20,8 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
     attrs_to_dict_for_cty,
     check_test_only_access,
     create_diagnostic_from_exception,
+    derive_identity_values,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
@@ -45,6 +48,15 @@ async def _import_resource_state_impl(
     while import is given an ID STRING and must locate the object from that alone.
     A resource whose identity is more than its id — a workspace plus a name, say —
     can only answer the second question deliberately.
+
+    Identity needs no hook of its own. `ImportResourceState.Request` carries both
+    `id` and `identity`, and Terraform sends whichever the practitioner wrote, so
+    this is one operation with two input forms rather than two operations — a
+    separate `import_by_identity` would let a resource implement one and silently
+    return no identity from the other. So the identity arrives on `ctx.identity`,
+    exactly as it does for read, plan and apply, and the answer is derived from
+    the returned state by the same `get_identity()` those three use. A resource
+    gains all of it by declaring `get_identity_schema()` and nothing else.
     """
     response = pb.ImportResourceState.Response()
 
@@ -70,6 +82,7 @@ async def _import_resource_state_impl(
         check_test_only_access(resource_class, request.type_name, "resource")
 
         resource_schema = resource_class.get_schema()
+        identity_schema = resolve_identity_schema(resource_class)
         resource_handler = resource_class()
         import_state = getattr(resource_handler, "import_state", None)
         if import_state is None:
@@ -103,6 +116,9 @@ async def _import_resource_state_impl(
             state=None,
             capabilities=provider_instance.metadata.capabilities if provider_instance else {},  # type: ignore[arg-type]
             test_mode_enabled=test_mode_enabled,
+            identity=(
+                unmarshal_identity(request.identity, identity_schema) if identity_schema is not None else None
+            ),
         )
 
         imported = await import_state(resource_context, request.id)
@@ -147,6 +163,18 @@ async def _import_resource_state_impl(
             if imported_private is not None
             else b""
         )
+
+        # Terraform reads ImportedResource.identity and writes it to state, so a
+        # resource that declares an identity schema and is then imported without
+        # this arrives in state with an empty identity -- and every later plan
+        # sees a change it cannot explain.
+        if identity_schema is not None:
+            identity_values = derive_identity_values(
+                resource_class, imported, request.type_name, "import_resource_state"
+            )
+            if identity_values is not None:
+                imported_resource.identity.CopyFrom(marshal_identity(identity_values, identity_schema))
+
         response.imported_resources.append(imported_resource)
 
         logger.info(

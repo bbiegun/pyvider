@@ -44,6 +44,59 @@ from pyvider.schema import PvsSchema
 PATH_STEP_REGEX = re.compile(r"(\.?)(\w+)|\[(\d+)\]|\[['\"]([^'\"]+)['\"]\]")
 
 
+def derive_identity_values(
+    resource_class: Any,
+    state_attrs: Any,
+    resource_type: str,
+    operation: str,
+) -> dict[str, Any] | None:
+    """Derive identity from a state that is fully known, or None with a warning.
+
+    Read, apply and import all reach this with a state that exists: a destroy is
+    excluded before the call, and a read or import that found nothing has already
+    returned. So both failure modes are genuine defects rather than "not yet
+    knowable":
+
+    - A raised exception almost certainly indicates a bug in this resource's
+      `get_identity()` override -- there is no missing-state excuse left here.
+    - An ordinary None return means the identity schema's attribute names did not
+      resolve against the state object -- a schema/state mismatch.
+
+    Neither is surfaced as a Terraform diagnostic. The operation itself
+    succeeded, and failing it over an identity-derivation bug would misreport a
+    live resource as unreadable or a successful create as a failure. Both are
+    logged at WARNING so they are visible in provider logs rather than
+    disappearing.
+
+    `plan_resource_change` keeps its own version deliberately: during plan the
+    state may legitimately not be known yet, so a None there is an ordinary
+    answer rather than a defect, and it must not warn.
+    """
+    try:
+        identity_values: dict[str, Any] | None = resource_class.get_identity(state_attrs)
+    except Exception as e:
+        logger.warning(
+            f"Omitting new identity: derivation raised an exception after a successful {operation}, "
+            "which likely indicates a bug in this resource's get_identity() override",
+            operation=operation,
+            resource_type=resource_type,
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        return None
+
+    if identity_values is None:
+        logger.warning(
+            "Omitting new identity: get_identity() returned None even though the new state "
+            "is fully known, which likely means the identity schema's attributes do not "
+            "resolve against this resource's state object",
+            operation=operation,
+            resource_type=resource_type,
+        )
+
+    return identity_values
+
+
 def resolve_identity_schema(resource_class: Any) -> PvsSchema | None:
     """Return a resource's identity schema, or None if it declares none.
 

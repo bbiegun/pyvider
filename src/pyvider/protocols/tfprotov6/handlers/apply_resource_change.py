@@ -31,6 +31,7 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
     check_test_only_access,
     create_diagnostic_from_exception,
     cty_to_attrs_instance,
+    derive_identity_values,
     is_valid_refinement,
     resolve_identity_schema,
 )
@@ -257,52 +258,6 @@ def _handle_apply_result(
         logger.debug("Serialized private bytes", serialized_bytes=repr(serialized_bytes))
 
 
-def _derive_new_state_identity_values(
-    resource_class: Any,
-    new_state_attrs: Any,
-    resource_type: str,
-) -> dict[str, Any] | None:
-    """Derive identity from the post-apply state, which -- unlike plan -- is fully known.
-
-    Callers only invoke this when there IS a new state (destroys, where new_state_attrs is
-    None, are excluded before this function is ever called), so both failure modes handled
-    here are genuine defects rather than "not yet knowable":
-
-    - A raised exception almost certainly indicates a bug in this resource's get_identity()
-      override -- there is no missing-state excuse left by this point.
-    - An ordinary None return means the identity schema's attribute names did not resolve
-      against the state object -- a schema/state mismatch.
-
-    Neither is surfaced as a Terraform diagnostic -- the apply itself succeeded, and failing
-    the whole response over an identity-derivation bug would misreport a successful
-    create/update as a failure -- but both are logged at WARNING so they are visible in
-    provider logs instead of silently disappearing.
-    """
-    try:
-        identity_values: dict[str, Any] | None = resource_class.get_identity(new_state_attrs)
-    except Exception as e:
-        logger.warning(
-            "Omitting new identity: derivation raised an exception after a successful apply, "
-            "which likely indicates a bug in this resource's get_identity() override",
-            operation="apply_resource_change",
-            resource_type=resource_type,
-            error_type=type(e).__name__,
-            error_message=str(e),
-        )
-        return None
-
-    if identity_values is None:
-        logger.warning(
-            "Omitting new identity: get_identity() returned None even though the new state "
-            "is fully known, which likely means the identity schema's attributes do not "
-            "resolve against this resource's state object",
-            operation="apply_resource_change",
-            resource_type=resource_type,
-        )
-
-    return identity_values
-
-
 @rpc_handler("ApplyResourceChange")
 async def ApplyResourceChangeHandler(
     request: pb.ApplyResourceChange.Request, context: Any
@@ -378,7 +333,9 @@ async def _apply_resource_change_impl(
             response,
             identity_schema=identity_schema,
             identity_values=(
-                _derive_new_state_identity_values(resource_class, new_state_attrs, request.type_name)
+                derive_identity_values(
+                    resource_class, new_state_attrs, request.type_name, "apply_resource_change"
+                )
                 if identity_schema is not None and new_state_attrs is not None
                 else None
             ),

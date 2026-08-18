@@ -278,7 +278,7 @@ async def test_impl_skips_derivation_entirely_on_destroy() -> None:
     would pass even if the (wrong) exception path silently produced the same result."""
     with (
         _patched(IdentityResourceRaisingUnconditionally),
-        patch(f"{MODULE}._derive_new_state_identity_values") as mock_derive,
+        patch(f"{MODULE}.derive_identity_values") as mock_derive,
     ):
         response = await _apply_resource_change_impl(_destroy_request(), context=None)
 
