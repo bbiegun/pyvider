@@ -200,8 +200,18 @@ module = ["pyvider.protocols.tfprotov6.protobuf.*"]
 ignore_errors = true
 
 [tool.mutmut]
-paths_to_mutate = ["src/pyvider/protocols/tfprotov6/handlers"]
-runner = "pytest tests/tfprotov6/handlers/ -x --tb=short"
+# `paths_to_mutate` was renamed to `source_paths` in mutmut 3.
+# The whole package must be copied, not just the modules under test: mutmut
+# runs the suite inside `mutants/`, and a partial copy leaves imports like
+# `pyvider.hub` unresolvable. Narrow what actually runs with a mutant-name
+# filter instead, e.g. `mutmut run "src.pyvider.state_stores.*"`.
+source_paths = ["src/pyvider"]
+# The runner must cover every source path above, or mutants in the newer
+# packages are reported as survivors purely because nothing exercised them.
+# Scope collection to the suites that exercise the mutated code. Collecting
+# the whole tree pulls in tests/docs/, whose module-level pytest.skip aborts
+# mutmut's stats run.
+tests_dir = ["tests/tfprotov6/handlers", "tests/state_stores", "tests/list_resources", "tests/actions"]
 dict_synonyms = ["dict", "OrderedDict", "defaultdict"]
 use_patch_file = false
 

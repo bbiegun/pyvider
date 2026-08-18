@@ -17,6 +17,7 @@ from pathlib import Path
 import time
 
 from pyvider.state_stores import FileSystemStateStore, StateLockConflictError
+from pyvider.state_stores._filelock import exclusive_file_mutex
 
 TYPE_NAME = "concurrent_store"
 STATE_ID = "shared"
@@ -86,6 +87,25 @@ def write_own_state(root: str, start_flag: str, index: int) -> str:
     state_id = f"worker-{index}"
     asyncio.run(store.write_state(TYPE_NAME, state_id, f"payload-{index}".encode()))
     return state_id
+
+
+def hold_mutex(lock_path: str, ready_flag: str, release_flag: str) -> str:
+    """Hold the cross-process file mutex until told to let go.
+
+    POSIX record locks are owned by the *process*, so a second thread in the
+    same process would acquire the mutex rather than block on it. Only a
+    separate process can prove contention.
+    """
+    ready = Path(ready_flag)
+    release = Path(release_flag)
+    with exclusive_file_mutex(Path(lock_path)):
+        ready.write_text("held", encoding="utf-8")
+        deadline = time.monotonic() + 30.0
+        while not release.exists():
+            if time.monotonic() >= deadline:  # pragma: no cover - watchdog
+                break
+            time.sleep(0.002)
+    return "released"
 
 
 def read_state(root: str, state_id: str) -> bytes | None:

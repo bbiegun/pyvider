@@ -235,6 +235,39 @@ async def test_a_resource_without_the_hook_passes_the_state_through() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_resource_without_a_state_class_gets_the_raw_cty_value() -> None:
+    """A resource may skip state_class and read the CtyValue directly."""
+    seen: list[Any] = []
+
+    class RawStateWidget:
+        state_class = None
+        config_class = None
+
+        @classmethod
+        def get_schema(cls) -> PvsSchema:
+            return s_resource(attributes={"id": a_str()})
+
+        async def generate_config(self, state: Any) -> Any:
+            seen.append(state)
+            return {"id": "rewritten"}
+
+    hub.register("resource", "raw_state_widget", RawStateWidget)
+    state = marshal({"id": "w-1"}, schema=RawStateWidget.get_schema().block)
+    request = pb.GenerateResourceConfig.Request(type_name="raw_state_widget", state=state)
+
+    try:
+        response = await GenerateResourceConfigHandler(request, context=None)
+    finally:
+        hub.unregister("resource", "raw_state_widget")
+
+    assert list(response.diagnostics) == []
+    # No state_class means no attrs conversion: the hook sees the CtyValue.
+    assert seen[0]["id"].value == "w-1"
+    decoded = unmarshal(response.config, schema=RawStateWidget.get_schema().block)
+    assert decoded["id"].value == "rewritten"
+
+
+@pytest.mark.asyncio
 async def test_the_base_hook_defaults_to_passing_the_state_through() -> None:
     assert await BaseResource.generate_config(object(), None) is None  # type: ignore[arg-type]
 

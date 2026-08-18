@@ -167,6 +167,25 @@ async def test_unlocking_allows_the_next_lock(durable_backend: FileSystemStateSt
 
 
 @pytest.mark.asyncio
+async def test_unlock_with_a_lock_id_that_does_not_hold_warns(
+    durable_backend: FileSystemStateStore,
+) -> None:
+    await LockStateHandler(
+        pb.LockState.Request(type_name=TYPE_NAME, state_id="main", operation="apply"), context=None
+    )
+
+    response = await UnlockStateHandler(
+        pb.UnlockState.Request(type_name=TYPE_NAME, state_id="main", lock_id="not-the-holder"),
+        context=None,
+    )
+
+    # A warning, not an error: releasing a lock you do not hold is a caller
+    # mistake, but it leaves the state exactly as it was.
+    assert response.diagnostics[0].severity == pb.Diagnostic.WARNING
+    assert response.diagnostics[0].summary == "UnlockState lock not held"
+
+
+@pytest.mark.asyncio
 async def test_lock_failure_other_than_conflict_is_reported(
     durable_backend: FileSystemStateStore,
 ) -> None:
