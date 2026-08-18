@@ -17,6 +17,7 @@ from typing import Any
 
 from provide.foundation import logger
 
+from pyvider.protocols.tfprotov6.handlers._component_config import decode_component_config
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.state_stores import (
@@ -31,26 +32,6 @@ from pyvider.state_stores import (
 def _backend(type_name: str) -> BaseStateStore:
     """Resolve the backend serving a store type."""
     return state_store_manager.resolve(type_name)
-
-
-async def _decode_config(backend: BaseStateStore, config: Any) -> Any:
-    """Turn a wire config into whatever the backend's validate() expects.
-
-    A backend without a schema declares no configuration, so there is nothing
-    to decode and the hook receives None. Decoding failures are surfaced to the
-    caller rather than swallowed -- an unreadable config is a real diagnostic.
-    """
-    schema = backend.get_schema()
-    if schema is None or not config.ByteSize():
-        return None
-
-    from pyvider.conversion import unmarshal
-    from pyvider.protocols.tfprotov6.handlers.utils import cty_to_attrs_instance
-
-    config_cty = unmarshal(config, schema=schema.block)
-    if backend.config_class is None:
-        return config_cty
-    return cty_to_attrs_instance(config_cty, backend.config_class)
 
 
 async def read_state_bytes(type_name: str, state_id: str) -> bytes | None:
@@ -90,7 +71,7 @@ async def ValidateStateStoreConfigHandler(
     """Validate a state-store configuration against its backend."""
     try:
         backend = _backend(request.type_name)
-        config = await _decode_config(backend, request.config)
+        config = decode_component_config(backend, request.config)
         errors = await backend.validate(config)
     except Exception as exc:
         logger.error(
@@ -123,7 +104,7 @@ async def ConfigureStateStoreHandler(
     chunk_size = state_store_manager.set_chunk_size(request.type_name, request.capabilities.chunk_size)
     try:
         backend = _backend(request.type_name)
-        config = await _decode_config(backend, request.config)
+        config = decode_component_config(backend, request.config)
         await backend.configure(config, chunk_size)
     except Exception as exc:
         logger.error(

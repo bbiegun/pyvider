@@ -99,6 +99,21 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
 
         return values
 
+    async def generate_config(self, state: StateType | CtyValue | None) -> Any:
+        """Turn existing state into a valid configuration for this resource.
+
+        Terraform calls this when generating configuration for a resource it
+        discovered rather than one the practitioner wrote, so the result has to
+        be a value the resource's own config schema accepts -- computed-only
+        attributes dropped, required ones present.
+
+        Returning None means "use the state as it stands", which is both the
+        default and the right answer whenever state is already a valid
+        configuration. The framework then forwards the original wire bytes
+        untouched instead of re-encoding them.
+        """
+        return None
+
     @classmethod
     async def upgrade_identity(cls, version: int, raw_identity: dict[str, Any]) -> dict[str, Any]:
         """Upgrade identity data written under an older identity version.

@@ -102,6 +102,18 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=name,
             )
 
+        # Actions registered via @register_action back the action RPCs.
+        all_actions = get_filtered_components("action")
+        actions = []
+        for name in all_actions:
+            actions.append(pb.GetMetadata.ActionMetadata(type_name=name))
+            logger.debug(
+                "Action discovered during metadata collection",
+                operation="get_metadata",
+                component_type="action",
+                component_name=name,
+            )
+
         logger.info(
             "GetMetadata completed successfully",
             operation="get_metadata",
@@ -111,6 +123,7 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
             ephemeral_resource_count=len(ephemeral_resources),
             state_store_count=len(state_stores),
             list_resource_count=len(list_resources),
+            action_count=len(actions),
         )
 
         response = pb.GetMetadata.Response(
@@ -126,7 +139,7 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
             ephemeral_resources=ephemeral_resources,
             list_resources=list_resources,
             state_stores=state_stores,
-            actions=[],
+            actions=actions,
             diagnostics=[],
         )
 

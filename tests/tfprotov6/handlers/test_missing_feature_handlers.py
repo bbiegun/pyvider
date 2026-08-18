@@ -37,19 +37,19 @@ def _assert_no_diagnostics(response_diag: list[pb.Diagnostic]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_resource_config_returns_state_without_warning() -> None:
+async def test_generate_resource_config_reports_an_unregistered_resource() -> None:
     request = pb.GenerateResourceConfig.Request(type_name="demo")
     request.state.msgpack = b'{"x": 1}'
 
     response = await GenerateResourceConfigHandler(request, context=None)
 
     assert isinstance(response, pb.GenerateResourceConfig.Response)
-    assert response.config == request.state
-    _assert_no_diagnostics(response.diagnostics)
+    assert response.diagnostics[0].severity == pb.Diagnostic.ERROR
+    assert "demo" in response.diagnostics[0].summary
 
 
 @pytest.mark.asyncio
-async def test_validate_list_resource_config_returns_empty_diagnostics() -> None:
+async def test_validate_list_resource_config_accepts_when_none_are_registered() -> None:
     request = pb.ValidateListResourceConfig.Request(type_name="demo")
 
     response = await ValidateListResourceConfigHandler(request, context=None)
@@ -81,23 +81,25 @@ async def test_configure_state_store_returns_server_capabilities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_action_returns_empty_diagnostics() -> None:
+async def test_plan_action_reports_an_unregistered_action() -> None:
     request = pb.PlanAction.Request(action_type="my_action")
 
     response = await PlanActionHandler(request, context=None)
 
     assert isinstance(response, pb.PlanAction.Response)
-    _assert_no_diagnostics(response.diagnostics)
+    assert response.diagnostics[0].severity == pb.Diagnostic.ERROR
+    assert "my_action" in response.diagnostics[0].summary
 
 
 @pytest.mark.asyncio
-async def test_validate_action_config_returns_empty_diagnostics() -> None:
+async def test_validate_action_config_reports_an_unregistered_action() -> None:
     request = pb.ValidateActionConfig.Request(type_name="my_action")
 
     response = await ValidateActionConfigHandler(request, context=None)
 
     assert isinstance(response, pb.ValidateActionConfig.Response)
-    _assert_no_diagnostics(response.diagnostics)
+    assert response.diagnostics[0].severity == pb.Diagnostic.ERROR
+    assert "my_action" in response.diagnostics[0].summary
 
 
 @pytest.mark.asyncio

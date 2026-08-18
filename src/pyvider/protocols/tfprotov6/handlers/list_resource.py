@@ -17,12 +17,10 @@ from typing import Any
 
 from provide.foundation import logger
 
-from pyvider.conversion import marshal, marshal_identity, unmarshal
-from pyvider.list_resources import BaseListResource, ListResourceContext, ListResult
-from pyvider.protocols.tfprotov6.handlers.utils import (
-    cty_to_attrs_instance,
-    get_filtered_components,
-)
+from pyvider.conversion import marshal, marshal_identity
+from pyvider.list_resources import ListResourceContext, ListResult
+from pyvider.protocols.tfprotov6.handlers._component_config import decode_component_config
+from pyvider.protocols.tfprotov6.handlers.utils import get_filtered_components
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.schema import PvsSchema
 
@@ -32,18 +30,6 @@ def _error_event(summary: str, detail: str = "") -> pb.ListResource.Event:
     return pb.ListResource.Event(
         diagnostic=[pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=summary, detail=detail)]
     )
-
-
-def _decode_config(list_resource_class: type[BaseListResource], config: pb.DynamicValue) -> Any:
-    """Decode the list block configuration into the provider's config type."""
-    if not config.ByteSize():
-        return None
-
-    schema = list_resource_class.get_schema()
-    config_cty = unmarshal(config, schema=schema.block)
-    if list_resource_class.config_class is None:
-        return config_cty
-    return cty_to_attrs_instance(config_cty, list_resource_class.config_class)
 
 
 def _build_event(
@@ -110,7 +96,7 @@ async def stream_list_resource(
         return
 
     try:
-        config = _decode_config(list_resource_class, request.config)
+        config = decode_component_config(list_resource_class, request.config)
         instance = list_resource_class()
         errors = await instance.validate(config)
     except Exception as exc:

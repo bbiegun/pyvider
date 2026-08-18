@@ -85,7 +85,7 @@ async def test_write_state_bytes_persists_state_and_returns_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invoke_action_emits_completed_event() -> None:
+async def test_invoke_action_completes_with_an_error_for_an_unknown_action() -> None:
     handler = ProviderHandler()
 
     request = pb.InvokeAction.Request(action_type="demo-action")
@@ -97,5 +97,5 @@ async def test_invoke_action_emits_completed_event() -> None:
     assert len(events) == 1
     event = events[0]
     assert event.WhichOneof("type") == "completed"
-    completed = event.completed
-    assert completed.diagnostics == []
+    assert event.completed.diagnostics[0].severity == pb.Diagnostic.ERROR
+    assert "demo-action" in event.completed.diagnostics[0].summary

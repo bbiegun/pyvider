@@ -99,6 +99,29 @@ async def _collect_list_resource_schemas(
     return await _collect_schemas("list_resource", diagnostics)
 
 
+async def _collect_action_schemas(
+    diagnostics: list[pb.Diagnostic],
+) -> dict[str, pb.ActionSchema]:
+    """Convert the schemas of registered actions.
+
+    Actions are wrapped in ActionSchema rather than sent as a bare Schema,
+    which is the shape the protocol reserves for future action-only fields.
+    """
+    schemas: dict[str, pb.ActionSchema] = {}
+    for name, component in get_filtered_components("action").items():
+        try:
+            schemas[name] = pb.ActionSchema(schema=await pvs_schema_to_proto(component.get_schema()))
+        except Exception as e:
+            diagnostics.append(
+                pb.Diagnostic(
+                    severity=pb.Diagnostic.WARNING,
+                    summary=f"Schema collection error for action '{name}'",
+                    detail=str(e),
+                )
+            )
+    return schemas
+
+
 async def _collect_state_store_schemas(
     diagnostics: list[pb.Diagnostic],
 ) -> dict[str, pb.Schema]:
@@ -203,6 +226,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
         ephemeral_resource_schemas = await _collect_ephemeral_resource_schemas(diagnostics)
         list_resource_schemas = await _collect_list_resource_schemas(diagnostics)
         state_store_schemas = await _collect_state_store_schemas(diagnostics)
+        action_schemas = await _collect_action_schemas(diagnostics)
 
         response = pb.GetProviderSchema.Response(
             provider=provider_proto_schema,
@@ -212,6 +236,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
             ephemeral_resource_schemas=ephemeral_resource_schemas,
             list_resource_schemas=list_resource_schemas,
             state_store_schemas=state_store_schemas,
+            action_schemas=action_schemas,
             diagnostics=diagnostics,
         )
 
@@ -225,6 +250,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
             ephemeral_resource_count=len(ephemeral_resource_schemas),
             list_resource_count=len(list_resource_schemas),
             state_store_count=len(state_store_schemas),
+            action_count=len(action_schemas),
             warning_count=len([d for d in diagnostics if d.severity == pb.Diagnostic.WARNING]),
         )
 

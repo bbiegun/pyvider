@@ -13,6 +13,7 @@ from attrs import define, field
 from provide.foundation import logger
 
 from pyvider.observability import handler_duration, handler_errors, handler_requests
+from pyvider.protocols.tfprotov6.handlers.action_handlers import stream_invoke_action
 from pyvider.protocols.tfprotov6.handlers.list_resource import stream_list_resource
 from pyvider.protocols.tfprotov6.handlers.state_store_handlers import (
     read_state_bytes,
@@ -463,11 +464,8 @@ class ProviderHandler(ProviderServicer):
                 operation="invoke_action",
                 action_type=request.action_type,
             )
-            yield pb.InvokeAction.Event(
-                completed=pb.InvokeAction.Event.Completed(
-                    diagnostics=[],
-                )
-            )
+            async for event in stream_invoke_action(request, context):
+                yield event
         except Exception:
             handler_errors.inc(handler="InvokeAction")
             raise
