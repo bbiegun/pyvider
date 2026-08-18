@@ -53,7 +53,9 @@ def _payload(value: Any) -> Any:
     return value.value if isinstance(value, CtyValue) else value
 
 
-def check_required_attributes(block: PvsObjectType, config: Any, path: CtyPath | None = None) -> None:
+def check_required_attributes(
+    block: PvsObjectType, config: Any, path: CtyPath | None = None, is_state: bool = False
+) -> None:
     """Raise if any `required` attribute in the schema tree is present and null.
 
     Absent is not the same as null and is left alone: cty maps an absent
@@ -66,18 +68,20 @@ def check_required_attributes(block: PvsObjectType, config: Any, path: CtyPath |
         return
 
     for name, attribute in block.attributes.items():
-        _check_attribute(name, attribute, mapping, here)
+        _check_attribute(name, attribute, mapping, here, is_state)
     for nested in block.block_types:
-        _check_block(nested, mapping, here)
+        _check_block(nested, mapping, here, is_state)
 
 
-def _check_attribute(name: str, attribute: PvsAttribute, mapping: Mapping[str, Any], path: CtyPath) -> None:
+def _check_attribute(
+    name: str, attribute: PvsAttribute, mapping: Mapping[str, Any], path: CtyPath, is_state: bool
+) -> None:
     if name not in mapping:
         return
 
     value = mapping[name]
     attribute_path = path.child(name)
-    if attribute.required and _is_null(value):
+    if attribute.required and _is_null(value) and not (is_state and getattr(attribute, "write_only", False)):
         raise CtyAttributeValidationError(ERR_ATTRIBUTE_CANNOT_BE_NULL, value=None, path=attribute_path)
 
     # `a_obj` keeps the nested schema on the attribute, so required-ness inside
@@ -85,10 +89,10 @@ def _check_attribute(name: str, attribute: PvsAttribute, mapping: Mapping[str, A
     # do not -- the element factories take a CtyType and discard the wrapper --
     # so nesting below a collection attribute is out of reach by construction.
     if attribute.object_type is not None and not _is_null(value):
-        check_required_attributes(attribute.object_type, value, attribute_path)
+        check_required_attributes(attribute.object_type, value, attribute_path, is_state)
 
 
-def _check_block(nested: PvsNestedBlock, mapping: Mapping[str, Any], path: CtyPath) -> None:
+def _check_block(nested: PvsNestedBlock, mapping: Mapping[str, Any], path: CtyPath, is_state: bool) -> None:
     if nested.type_name not in mapping:
         return
 
@@ -100,31 +104,31 @@ def _check_block(nested: PvsNestedBlock, mapping: Mapping[str, Any], path: CtyPa
     payload = _payload(value)
     match nested.nesting:
         case NestingMode.LIST:
-            _check_indexed(nested, payload, block_path)
+            _check_indexed(nested, payload, block_path, is_state)
         case NestingMode.MAP:
-            _check_keyed(nested, payload, block_path)
+            _check_keyed(nested, payload, block_path, is_state)
         case NestingMode.SET:
             # Terraform identifies a set element by its value, and there is no
             # proto step for that (`cty_path_to_proto_path` has none either), so
             # an index here would be an invented position. Report the block.
             for element in payload if isinstance(payload, list | tuple | frozenset | set) else ():
-                check_required_attributes(nested.block, element, block_path)
+                check_required_attributes(nested.block, element, block_path, is_state)
         case _:  # SINGLE, GROUP
-            check_required_attributes(nested.block, value, block_path)
+            check_required_attributes(nested.block, value, block_path, is_state)
 
 
-def _check_indexed(nested: PvsNestedBlock, payload: Any, block_path: CtyPath) -> None:
+def _check_indexed(nested: PvsNestedBlock, payload: Any, block_path: CtyPath, is_state: bool) -> None:
     if not isinstance(payload, list | tuple):
         return
     for index, element in enumerate(payload):
-        check_required_attributes(nested.block, element, block_path.index_step(index))
+        check_required_attributes(nested.block, element, block_path.index_step(index), is_state)
 
 
-def _check_keyed(nested: PvsNestedBlock, payload: Any, block_path: CtyPath) -> None:
+def _check_keyed(nested: PvsNestedBlock, payload: Any, block_path: CtyPath, is_state: bool) -> None:
     if not isinstance(payload, Mapping):
         return
     for key, element in payload.items():
-        check_required_attributes(nested.block, element, block_path.key_step(key))
+        check_required_attributes(nested.block, element, block_path.key_step(key), is_state)
 
 
 # 🐍🏗️🔚

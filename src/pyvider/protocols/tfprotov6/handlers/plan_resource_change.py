@@ -213,7 +213,7 @@ def _handle_planned_state_dict(
     # to hand back to Terraform. Raises, and is caught the same way as every
     # other planning failure by _plan_resource_change_impl's own exception
     # handling.
-    check_required_attributes(resource_schema.block, raw_values_for_validation)
+    check_required_attributes(resource_schema.block, raw_values_for_validation, is_state=True)
 
     # Validate the planned state - unknown values will be preserved by CTY
     planned_state_cty_final = validator_type.validate(raw_values_for_validation)
@@ -250,7 +250,7 @@ def _derive_planned_identity_values(
         # the "malformed/incomplete planned-state data" this function's
         # broad except already documents catching, so it is checked here
         # too and left to that same except -- omit identity, warn, move on.
-        check_required_attributes(resource_schema.block, planned_state_dict)
+        check_required_attributes(resource_schema.block, planned_state_dict, is_state=True)
         identity_values: dict[str, Any] | None = resource_class.get_identity(
             cty_to_attrs_instance(
                 resource_schema.block.to_cty_type().validate(planned_state_dict),
