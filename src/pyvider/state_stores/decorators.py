@@ -14,7 +14,9 @@ from provide.foundation import logger
 from pyvider.state_stores.base import BaseStateStore
 
 
-def register_state_store(name: str) -> Callable[[type[BaseStateStore]], type[BaseStateStore]]:
+def register_state_store(
+    name: str, test_only: bool = False
+) -> Callable[[type[BaseStateStore]], type[BaseStateStore]]:
     """Register a state-store backend under a Terraform store type name.
 
     Registration is eager rather than marker-based (the pattern used by
@@ -31,8 +33,15 @@ def register_state_store(name: str) -> Callable[[type[BaseStateStore]], type[Bas
 
         cls._is_registered_state_store = True  # type: ignore[attr-defined]
         cls._registered_name = name  # type: ignore[attr-defined]
+        cls._is_test_only = test_only  # type: ignore[attr-defined]
         hub.register("state_store", name, cls)
-        logger.debug("Registered state store", name=name, backend=cls.__name__, durable=cls.durable)
+        logger.debug(
+            "Registered state store",
+            name=name,
+            backend=cls.__name__,
+            durable=cls.durable,
+            test_only=test_only,
+        )
         return cls
 
     return decorator

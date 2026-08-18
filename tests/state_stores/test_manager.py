@@ -213,8 +213,20 @@ def test_register_state_store_decorator_registers_in_the_hub() -> None:
         assert hub.get_component("state_store", "decorated_store") is DecoratedStore
         assert DecoratedStore._registered_name == "decorated_store"
         assert DecoratedStore._is_registered_state_store is True
+        assert DecoratedStore._is_test_only is False
     finally:
         hub.unregister("state_store", "decorated_store")
+
+
+def test_register_state_store_can_mark_a_backend_test_only() -> None:
+    @register_state_store("test_only_store", test_only=True)
+    class TestOnlyStore(InMemoryStateStore):
+        pass
+
+    try:
+        assert TestOnlyStore._is_test_only is True
+    finally:
+        hub.unregister("state_store", "test_only_store")
 
 
 def test_register_state_store_rejects_a_non_backend() -> None:
