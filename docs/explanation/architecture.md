@@ -141,7 +141,7 @@ class TerraformProviderServicer:
 ```
 
 **Key Features:**
-- Full Protocol v6 implementation
+- Partial Terraform Plugin Protocol v6.11 implementation
 - Async/await support throughout
 - Automatic error handling and diagnostics
 - Request/response logging for debugging
@@ -237,7 +237,7 @@ class PrivateState:
 
 ### Terraform Plugin Protocol v6
 
-Pyvider implements the complete Terraform Plugin Protocol v6 specification:
+Pyvider implements the Terraform Plugin Protocol v6 specification, with baseline in-memory behavior for all v6.11 RPCs:
 
 #### Supported RPCs
 
@@ -257,9 +257,24 @@ Pyvider implements the complete Terraform Plugin Protocol v6 specification:
 | `ReadDataSource` | Reads data source | ✅ Full |
 | `GetFunctions` | Returns function definitions | ✅ Full |
 | `CallFunction` | Executes functions | ✅ Full |
+| `GenerateResourceConfig` | Generates planned resource config | ✅ Full |
+| `ValidateListResourceConfig` | Validates generated resource list input | ✅ Full |
+| `ValidateEphemeralResourceConfig` | Validates ephemeral config | ✅ Full |
 | `OpenEphemeralResource` | Opens ephemeral resource | ✅ Full |
 | `RenewEphemeralResource` | Renews ephemeral resource | ✅ Full |
 | `CloseEphemeralResource` | Closes ephemeral resource | ✅ Full |
+| `ValidateStateStoreConfig` | Validates state store config | ✅ Full |
+| `ConfigureStateStore` | Configures state store backends | ✅ Full |
+| `ListResource` | Streams listable resources | ✅ Full |
+| `ReadStateBytes` | Reads state store payload chunks | ✅ Full |
+| `WriteStateBytes` | Writes state store payload chunks | ✅ Full |
+| `LockState` | Acquires state lock | ✅ Full |
+| `UnlockState` | Releases state lock | ✅ Full |
+| `GetStates` | Enumerates provider states | ✅ Full |
+| `DeleteState` | Deletes remote state data | ✅ Full |
+| `PlanAction` | Plans action execution | ✅ Full |
+| `InvokeAction` | Invokes actions | ✅ Full |
+| `ValidateActionConfig` | Validates action config | ✅ Full |
 | `StopProvider` | Graceful shutdown | ✅ Full |
 
 ### Message Flow

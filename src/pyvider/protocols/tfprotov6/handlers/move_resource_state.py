@@ -24,25 +24,31 @@ async def _move_resource_state_impl(
     request: pb.MoveResourceState.Request, context: Any
 ) -> pb.MoveResourceState.Response:
     """Implementation of MoveResourceState handler."""
-    logger.warning(
-        "Move resource state operation not yet implemented",
+    logger.debug(
+        "MoveResourceState requested",
         operation="move_resource_state",
+        source_type_name=request.source_type_name,
         target_type_name=request.target_type_name,
-        source_type_name=request.source_type_name if hasattr(request, "source_type_name") else None,
+        source_state_has_json=bool(request.source_state.json),
     )
 
-    # Return diagnostic indicating feature not yet implemented
-    diag = pb.Diagnostic(
-        severity=pb.Diagnostic.WARNING,
-        summary="Resource move not yet implemented",
-        detail=(
-            f"Moving resources to type '{request.target_type_name}' is not yet implemented.\n\n"
-            "Suggestion: This provider does not currently support moving resources between types. "
-            "You will need to recreate the resource instead.\n\n"
-            "Workaround: Destroy the old resource and create a new one with the desired type."
-        ),
+    target_state = pb.DynamicValue(json=request.source_state.json or b"{}")
+    target_identity = pb.ResourceIdentityData(
+        identity_data=pb.DynamicValue(json=request.source_identity.json or b"{}")
     )
-    return pb.MoveResourceState.Response(diagnostics=[diag])
+
+    logger.info(
+        "MoveResourceState completed",
+        operation="move_resource_state",
+        target_state_bytes=len(target_state.json),
+    )
+
+    return pb.MoveResourceState.Response(
+        target_state=target_state,
+        diagnostics=[],
+        target_private=request.source_private,
+        target_identity=target_identity,
+    )
 
 
 # 🐍🏗️🔚

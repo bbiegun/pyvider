@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-
 from pyvider.protocols.tfprotov6.handlers.apply_resource_change import ApplyResourceChangeHandler
 from pyvider.protocols.tfprotov6.handlers.call_function import CallFunctionHandler
 from pyvider.protocols.tfprotov6.handlers.close_ephemeral_resource import CloseEphemeralResourceHandler
@@ -15,6 +14,18 @@ from pyvider.protocols.tfprotov6.handlers.get_resource_identity_schemas import (
     GetResourceIdentitySchemasHandler,
 )
 from pyvider.protocols.tfprotov6.handlers.import_resource_state import ImportResourceStateHandler
+from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import (
+    ConfigureStateStoreHandler,
+    DeleteStateHandler,
+    GenerateResourceConfigHandler,
+    GetStatesHandler,
+    LockStateHandler,
+    PlanActionHandler,
+    UnlockStateHandler,
+    ValidateActionConfigHandler,
+    ValidateListResourceConfigHandler,
+    ValidateStateStoreConfigHandler,
+)
 from pyvider.protocols.tfprotov6.handlers.move_resource_state import MoveResourceStateHandler
 from pyvider.protocols.tfprotov6.handlers.open_ephemeral_resource import OpenEphemeralResourceHandler
 from pyvider.protocols.tfprotov6.handlers.plan_resource_change import PlanResourceChangeHandler
@@ -40,24 +51,34 @@ __all__ = [
     "CallFunctionHandler",
     "CloseEphemeralResourceHandler",
     "ConfigureProviderHandler",
+    "ConfigureStateStoreHandler",
+    "DeleteStateHandler",
+    "GenerateResourceConfigHandler",
     "GetFunctionsHandler",
     "GetMetadataHandler",
     "GetProviderSchemaHandler",
     "GetResourceIdentitySchemasHandler",
+    "GetStatesHandler",
     "ImportResourceStateHandler",
+    "LockStateHandler",
     "MoveResourceStateHandler",
     "OpenEphemeralResourceHandler",
+    "PlanActionHandler",
     "PlanResourceChangeHandler",
     "ReadDataSourceHandler",
     "ReadResourceHandler",
     "RenewEphemeralResourceHandler",
     "StopProviderHandler",
+    "UnlockStateHandler",
     "UpgradeResourceIdentityHandler",
     "UpgradeResourceStateHandler",
+    "ValidateActionConfigHandler",
     "ValidateDataResourceConfigHandler",
     "ValidateEphemeralResourceConfigHandler",
+    "ValidateListResourceConfigHandler",
     "ValidateProviderConfigHandler",
     "ValidateResourceConfigHandler",
+    "ValidateStateStoreConfigHandler",
 ]
 
 # 🐍🏗️🔚

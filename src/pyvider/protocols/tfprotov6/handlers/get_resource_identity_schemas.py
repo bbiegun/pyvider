@@ -11,7 +11,7 @@ from provide.foundation import logger
 from pyvider.conversion import pvs_identity_schema_to_proto
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import (
-    get_all_components,
+    get_filtered_components,
     resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
@@ -40,7 +40,7 @@ async def _get_resource_identity_schemas_impl(
     identity_schemas: dict[str, pb.ResourceIdentitySchema] = {}
     diagnostics: list[pb.Diagnostic] = []
 
-    for name, resource_class in get_all_components("resource").items():
+    for name, resource_class in get_filtered_components("resource").items():
         try:
             schema = resolve_identity_schema(resource_class)
             if schema is None:

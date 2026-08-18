@@ -9,7 +9,7 @@ from typing import Any
 from provide.foundation import logger
 
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
-from pyvider.protocols.tfprotov6.handlers.utils import get_all_components
+from pyvider.protocols.tfprotov6.handlers.utils import get_filtered_components
 import pyvider.protocols.tfprotov6.protobuf as pb
 
 
@@ -28,8 +28,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
     )
 
     try:
-        # Dynamically discover registered resources (all, including test-only)
-        all_resources = get_all_components("resource")
+        # Discover production-usable resources, filtering test-only components when needed.
+        all_resources = get_filtered_components("resource")
         resources = []
         for resource_name in all_resources:
             resources.append(pb.GetMetadata.ResourceMetadata(type_name=resource_name))
@@ -40,8 +40,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=resource_name,
             )
 
-        # Get data sources (all, including test-only)
-        all_data_sources = get_all_components("data_source")
+        # Data sources should respect the same production/test-mode filter behavior.
+        all_data_sources = get_filtered_components("data_source")
         data_sources = []
         for ds_name in all_data_sources:
             data_sources.append(pb.GetMetadata.DataSourceMetadata(type_name=ds_name))
@@ -52,8 +52,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=ds_name,
             )
 
-        # Get functions (all, including test-only)
-        all_functions = get_all_components("function")
+        # Functions should respect the same production/test-mode filter behavior.
+        all_functions = get_filtered_components("function")
         functions = []
         for func_name in all_functions:
             functions.append(pb.GetMetadata.FunctionMetadata(name=func_name))
@@ -64,8 +64,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=func_name,
             )
 
-        # Get ephemeral resources (all, including test-only)
-        all_ephemerals = get_all_components("ephemeral_resource")
+        # Ephemerals should respect production/test-mode filtering.
+        all_ephemerals = get_filtered_components("ephemeral_resource")
         ephemeral_resources = []
         for name in all_ephemerals:
             ephemeral_resources.append(pb.GetMetadata.EphemeralMetadata(type_name=name))
@@ -90,11 +90,15 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 plan_destroy=True,
                 get_provider_schema_optional=True,
                 move_resource_state=True,
+                generate_resource_config=True,
             ),
             resources=resources,
             data_sources=data_sources,
             functions=functions,
             ephemeral_resources=ephemeral_resources,
+            list_resources=[],
+            state_stores=[],
+            actions=[],
             diagnostics=[],
         )
 

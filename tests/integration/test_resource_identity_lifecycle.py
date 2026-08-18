@@ -72,7 +72,7 @@ class WidgetResource(BaseResource[Any, WidgetState, WidgetConfig]):
 @pytest.mark.asyncio
 async def test_identity_schema_is_advertised() -> None:
     with patch(
-        "pyvider.protocols.tfprotov6.handlers.get_resource_identity_schemas.get_all_components",
+        "pyvider.protocols.tfprotov6.handlers.get_resource_identity_schemas.get_filtered_components",
         return_value={"pyvider_widget": WidgetResource},
     ):
         response = await GetResourceIdentitySchemasHandler(

@@ -65,6 +65,26 @@ def test_post_init(mock_provider: MagicMock) -> None:
 
     assert "CallFunction" in handler._handlers
 
+    assert "GenerateResourceConfig" in handler._handlers
+
+    assert "ValidateListResourceConfig" in handler._handlers
+
+    assert "ValidateStateStoreConfig" in handler._handlers
+
+    assert "ConfigureStateStore" in handler._handlers
+
+    assert "LockState" in handler._handlers
+
+    assert "UnlockState" in handler._handlers
+
+    assert "GetStates" in handler._handlers
+
+    assert "DeleteState" in handler._handlers
+
+    assert "PlanAction" in handler._handlers
+
+    assert "ValidateActionConfig" in handler._handlers
+
 
 @pytest.mark.asyncio
 async def test_delegate_success(mock_provider: MagicMock) -> None:

@@ -267,16 +267,13 @@ class TestUnimplementedHandlerMessages:
         assert "Suggestion:" in diag.detail
 
     @pytest.mark.asyncio
-    async def test_move_resource_state_has_workaround(self) -> None:
-        """Test that move handler provides workaround."""
+    async def test_move_resource_state_returns_no_workaround_diags(self) -> None:
+        """Move operation is implemented as an in-memory identity pass-through."""
         request = pb.MoveResourceState.Request(source_type_name="source", target_type_name="target")
 
         response = await _move_resource_state_impl(request, context=None)
 
-        assert len(response.diagnostics) == 1
-        diag = response.diagnostics[0]
-        assert "Workaround:" in diag.detail
-        assert "recreate the resource" in diag.detail
+        assert len(response.diagnostics) == 0
 
 
 class TestErrorMessageConsistency:

@@ -16,7 +16,7 @@ from pyvider.protocols.tfprotov6.adapters.function_adapter import (
     dict_to_proto_function,
 )
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
-from pyvider.protocols.tfprotov6.handlers.utils import get_all_components
+from pyvider.protocols.tfprotov6.handlers.utils import get_filtered_components
 import pyvider.protocols.tfprotov6.protobuf as pb
 
 # --- Module-level Cache using asyncio.Future ---
@@ -42,7 +42,7 @@ async def _collect_schemas(
 
     """
     schemas = {}
-    all_components = get_all_components(component_type)
+    all_components = get_filtered_components(component_type)
 
     for name, component in all_components.items():
         try:
