@@ -208,6 +208,17 @@ def _handle_apply_result(
 ) -> None:
     if new_state_attrs is not None:
         raw_new_state = attrs_to_dict_for_cty(new_state_attrs)
+
+        # Force write-only attributes to None (null in state)
+        write_only_attrs = {
+            name
+            for name, attr in getattr(resource_schema.block, 'attributes', {}).items()
+            if getattr(attr, "write_only", False)
+        }
+        for attr_name in write_only_attrs:
+            if attr_name in raw_new_state:
+                raw_new_state[attr_name] = None
+
         validator_type = resource_schema.block.to_cty_type()
         new_state_cty = validator_type.validate(raw_new_state)
 

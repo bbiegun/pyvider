@@ -78,6 +78,7 @@ def _pvs_attribute_to_proto(attr: PvsAttribute) -> pb.Schema.Attribute:
         computed=attr.computed,
         sensitive=attr.sensitive,
         deprecated=attr.deprecated,
+        write_only=attr.write_only,
     )
 
 

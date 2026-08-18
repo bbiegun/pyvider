@@ -356,6 +356,14 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         """Merge config fields into base_plan, skipping nulls and converting known CtyValues."""
         # NOTE: Don't use truthiness check on CtyValue - unknown values are falsy!
         # Use explicit 'is not None' instead
+        # Force write-only attributes to None (null in state)
+        schema = self.get_schema()
+        write_only_attrs = {
+            name for name, attr in getattr(schema.block, 'attributes', {}).items() if getattr(attr, "write_only", False)
+        }
+        for attr_name in write_only_attrs:
+            base_plan[attr_name] = None
+
         if (
             ctx.config_cty is not None
             and isinstance(ctx.config_cty, CtyValue)
@@ -364,8 +372,12 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
             cty_value_dict = ctx.config_cty.value
             if isinstance(cty_value_dict, dict):
                 for key, value in cty_value_dict.items():
+                    # Skip write-only attributes entirely from config copy
+                    if key in write_only_attrs:
+                        continue
+
                     # Only add if not already in base_plan (planned_state takes precedence)
-                    if key not in base_plan:
+                    if key not in base_plan or base_plan[key] is None:
                         # Skip null values - they're likely computed fields
                         if isinstance(value, CtyValue) and value.is_null:
                             continue
