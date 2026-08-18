@@ -237,7 +237,7 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
             # Force write-only attributes to None (null in state)
             write_only_attrs = {
                 name
-                for name, attr in getattr(resource_schema.block, 'attributes', {}).items()
+                for name, attr in getattr(resource_schema.block, "attributes", {}).items()
                 if getattr(attr, "write_only", False)
             }
             for attr_name in write_only_attrs:
