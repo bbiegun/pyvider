@@ -359,7 +359,9 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         # Force write-only attributes to None (null in state)
         schema = self.get_schema()
         write_only_attrs = {
-            name for name, attr in getattr(schema.block, 'attributes', {}).items() if getattr(attr, "write_only", False)
+            name
+            for name, attr in getattr(schema.block, "attributes", {}).items()
+            if getattr(attr, "write_only", False)
         }
         for attr_name in write_only_attrs:
             base_plan[attr_name] = None
