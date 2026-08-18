@@ -154,18 +154,25 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         `resolve_types` mutates the class, so the cost is paid once per class.
 
         ..note::
-            ``attrs.resolve_types()`` resolves all annotations for a class in one
-            call — if any single annotation references a name unavailable at runtime
-            (e.g. a name only under ``TYPE_CHECKING``), the entire resolution may
-            fail silently, leaving every field wrapped in ``CtyValue``.  This method
-            attempts per-field recovery after a class-level failure.
+            ``attrs.resolve_types()`` resolves a class in ONE call, so it is
+            all-or-nothing: a single annotation naming something unavailable at
+            runtime (typically a name imported only under ``TYPE_CHECKING``) leaves
+            *every* field on the class unresolved, including plain ones like
+            ``list[str]``. There is no per-field recovery -- attrs offers no
+            per-attribute resolution hook, and `Attribute` instances are frozen, so
+            the failure is reported loudly with the names still unresolved rather
+            than papered over.
         """
         try:
             attrs.resolve_types(target_cls)
-        except Exception:
+        except Exception as e:
+            unresolved = [f.name for f in attrs.fields(target_cls) if isinstance(f.type, str)]
             logger.warning(
-                "Could not resolve type annotations for %s",
+                "Could not resolve type annotations; these fields stay wrapped in CtyValue",
                 class_name=getattr(target_cls, "__name__", str(target_cls)),
+                unresolved_fields=unresolved,
+                error_type=type(e).__name__,
+                error_message=str(e),
             )
         return cast(tuple[Any, ...], attrs.fields(target_cls))
 
