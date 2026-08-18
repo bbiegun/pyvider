@@ -54,12 +54,18 @@ Pyvider uses a hub-based discovery system where components self-register via dec
 - `@register_data_source` - Read-only data
 - `@register_function` - Callable functions
 - `@register_ephemeral_resource` - Short-lived resources
+- `@register_list_resource` - Listable resources for the ListResource RPC
+- `@register_state_store` - Durable state-store backends
+- `@register_action` - Provider-defined actions
 
 ### Project Structure
 - `protocols/tfprotov6/` - Terraform Plugin Protocol v6 implementation
 - `schema/` - Type-safe data modeling
 - `conversion/` - Data transformation between Terraform and Python
 - `capabilities/` - Reusable, composable components
+- `state_stores/` - Durable state-store backends and lease-aware locking
+- `list_resources/` - Listable resource contract for the ListResource RPC
+- `actions/` - Provider-defined action contract
 
 For detailed architecture documentation, see `docs/core-concepts/`.
 

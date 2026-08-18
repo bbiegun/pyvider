@@ -171,6 +171,9 @@ Each component type has its own registration decorator:
 | `@register_data_source("name")` | Data Source |
 | `@register_function(name="name")` | Function |
 | `@register_ephemeral_resource("name")` | Ephemeral |
+| `@register_list_resource("name")` | List Resource |
+| `@register_state_store("name")` | State Store |
+| `@register_action("name")` | Action |
 | `@register_capability("name")` | Capability |
 
 ### Decorator Metadata

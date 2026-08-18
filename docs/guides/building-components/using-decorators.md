@@ -10,6 +10,9 @@ All Pyvider components use decorators for registration:
 - `@register_data_source` - Register data sources
 - `@register_function` - Register functions
 - `@register_ephemeral_resource` - Register ephemeral resources
+- `@register_list_resource` - Register listable resources
+- `@register_state_store` - Register state-store backends
+- `@register_action` - Register actions
 - `@register_capability` - Register capabilities
 
 ## Provider Decorator
