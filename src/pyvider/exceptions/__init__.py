@@ -28,6 +28,7 @@ from pyvider.exceptions.grpc import (
     RateLimitError,
 )
 from pyvider.exceptions.provider import (
+    ProviderAlreadyConfiguredError,
     ProviderConfigurationError,
     ProviderError,
     ProviderInitializationError,
@@ -81,6 +82,7 @@ __all__ = [
     "InvalidTypeError",
     "NetworkError",
     "PluginError",
+    "ProviderAlreadyConfiguredError",
     "ProviderConfigurationError",
     # Provider
     "ProviderError",

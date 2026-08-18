@@ -8,6 +8,7 @@
 from typing import Any
 
 import attrs
+from provide.testkit.mocking import patch
 import pytest
 
 from pyvider.hub import hub
@@ -16,6 +17,7 @@ from pyvider.protocols.tfprotov6.handlers.configure_provider import (
     _configure_provider_impl,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
+from pyvider.providers.base import BaseProvider
 
 
 @attrs.define
@@ -264,6 +266,14 @@ class TestConfigureHookIsInvoked:
         assert len(seen) == 1, "the provider's configure() hook was not called"
         assert not [d for d in response.diagnostics if d.severity == pb.Diagnostic.ERROR]
 
+        # WHAT the hook receives is the part that breaks providers, so assert it.
+        # The framework passes an attrs instance built by BaseResource.from_cty();
+        # a provider written against a dict (`config.get(...)`) fails on first use,
+        # and a test that only counts calls cannot tell the difference.
+        received = seen[0]
+        assert attrs.has(type(received)), f"expected an attrs instance, got {type(received).__name__}"
+        assert not isinstance(received, dict)
+
     @pytest.mark.asyncio
     async def test_configuring_twice_is_not_an_error(self, provider_in_hub: Any) -> None:
         """Terraform may configure a provider more than once in a session.
@@ -279,7 +289,46 @@ class TestConfigureHookIsInvoked:
         request = pb.ConfigureProvider.Request(config=marshal(config_cty, schema=schema.block))
 
         first = await ConfigureProviderHandler(request, context=None)
+        after_first = hub.get_component("singleton", "provider_context")
         second = await ConfigureProviderHandler(request, context=None)
 
         for response in (first, second):
             assert not [d for d in response.diagnostics if d.severity == pb.Diagnostic.ERROR]
+
+        # The repeat must not republish a context. The live provider refused the
+        # second configuration, so a context describing it would describe a state
+        # the provider never adopted.
+        assert hub.get_component("singleton", "provider_context") is after_first
+
+    @pytest.mark.asyncio
+    async def test_hook_failing_after_super_is_reported(self, provider_in_hub: Any) -> None:
+        """A configure() hook that fails after calling super() must be reported.
+
+        This is the ordinary shape — `await super().configure(config)` and then
+        build the client — and BaseProvider.configure() marks the provider
+        configured before the second half runs. Deciding "this is just a repeated
+        RPC" from that flag therefore swallowed genuine failures: Terraform was
+        told configuration succeeded, no diagnostic was emitted, and no
+        ProviderContext was ever published, so every later handler read None.
+        """
+        from pyvider.conversion import marshal
+        from pyvider.exceptions import ProviderError
+
+        provider = hub.get_component("singleton", "provider")
+        hub.unregister("singleton", "provider_context")
+
+        async def failing(self: Any, config: Any) -> None:
+            await BaseProvider.configure(self, config)
+            raise ProviderError("upstream endpoint unreachable")
+
+        schema = provider.schema
+        config_cty = schema.block.to_cty_type().validate({})
+        request = pb.ConfigureProvider.Request(config=marshal(config_cty, schema=schema.block))
+
+        with patch.object(type(provider), "configure", failing):
+            response = await ConfigureProviderHandler(request, context=None)
+
+        assert [d for d in response.diagnostics if d.severity == pb.Diagnostic.ERROR], (
+            "a failed configure() hook was reported to Terraform as success"
+        )
+        assert hub.get_component("singleton", "provider_context") is None

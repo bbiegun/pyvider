@@ -11,7 +11,7 @@ import attrs
 from attrs import define, field
 from provide.foundation import logger
 
-from pyvider.exceptions import FrameworkConfigurationError, ProviderError
+from pyvider.exceptions import FrameworkConfigurationError, ProviderAlreadyConfiguredError
 from pyvider.schema import PvsSchema
 
 
@@ -167,7 +167,7 @@ class BaseProvider:
                     provider_name=self.metadata.name,
                     provider_version=self.metadata.version,
                 )
-                raise ProviderError(
+                raise ProviderAlreadyConfiguredError(
                     f"Provider '{self.metadata.name}' has already been configured. "
                     f"Terraform providers can only be configured once per execution.\n\n"
                     f"Suggestion: Ensure your Terraform configuration has only one 'provider' block "

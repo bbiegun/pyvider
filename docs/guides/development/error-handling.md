@@ -79,7 +79,7 @@ class MyProvider(BaseProvider):
             raise ProviderConfigurationError("Invalid API key format")
 
         try:
-            self.client = APIClient(config["api_key"])
+            self.client = APIClient(config.api_key)
             await self.client.test_connection()
         except ConnectionError as e:
             raise ProviderConfigurationError(

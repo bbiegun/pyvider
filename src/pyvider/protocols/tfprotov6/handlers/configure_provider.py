@@ -10,7 +10,11 @@ from provide.foundation import logger
 from provide.foundation.config import get_env, parse_bool_extended
 
 from pyvider.conversion import unmarshal
-from pyvider.exceptions import ProviderConfigurationError, ProviderError, PyviderError
+from pyvider.exceptions import (
+    ProviderAlreadyConfiguredError,
+    ProviderConfigurationError,
+    PyviderError,
+)
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import create_diagnostic_from_exception
@@ -164,21 +168,22 @@ async def _configure_provider_impl(
             provider_instance._configured = True
             provider_context = ProviderContext(config=config_instance, test_mode_enabled=test_mode_enabled)
             hub.register("singleton", "provider_context", provider_context)
-        except ProviderError:
-            # ProviderError raised by the hook itself (not the "already configured"
-            # guard in BaseProvider.configure).  Re-raise only if it's not the
-            # expected "already configured" signal from a repeated RPC.
-            if provider_instance._configured:
-                # Already configured — this is a repeated RPC, treat as success
-                # (the "configure once" rule concerns multiple provider BLOCKS,
-                # not repeated ConfigureProvider RPCs).
-                logger.debug(
-                    "Provider was already configured",
-                    operation="configure_provider",
-                    provider_name=provider_instance.metadata.name,
-                )
-            else:
-                raise
+        except ProviderAlreadyConfiguredError:
+            # A repeated ConfigureProvider RPC, which is normal and must succeed:
+            # the "configure once" rule concerns multiple provider BLOCKS, not
+            # repeated RPCs against the same object. The context published by the
+            # first call still describes the live provider, so it is left alone.
+            #
+            # This is matched on the exception TYPE deliberately. Checking
+            # provider_instance._configured instead cannot distinguish the two
+            # cases: BaseProvider.configure() sets that flag before a subclass's
+            # own body has run, so the ordinary `await super().configure(...)`
+            # then build-a-client shape reports a failed hook as success.
+            logger.debug(
+                "Provider was already configured",
+                operation="configure_provider",
+                provider_name=provider_instance.metadata.name,
+            )
         except Exception as e:
             logger.error(
                 "Provider configure() hook failed",
