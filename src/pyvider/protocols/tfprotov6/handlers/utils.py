@@ -543,6 +543,8 @@ def cty_to_attrs_instance(cty_val: CtyValue | None, attrs_cls: type[Any] | None)
     """
     if attrs_cls is None:
         return None
+    if cty_val is not None and not cty_val.is_wholly_known():
+        return None
     if not inspect.isclass(attrs_cls):
         raise TypeError("Internal validation error: Passed object must be a class.")
     if not attrs.has(attrs_cls):

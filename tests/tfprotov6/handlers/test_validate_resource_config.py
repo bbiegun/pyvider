@@ -231,10 +231,59 @@ class TestValidateResourceConfigImpl:
 
             response = await _validate_resource_config_impl(request, context=None)
 
-            # Should not crash, may skip custom validation
+            # Should not crash, must skip custom validation for unknown values (Issue #5)
             assert isinstance(response, pb.ValidateResourceConfig.Response)
+            assert len(response.diagnostics) == 0
         finally:
             hub.unregister("resource", "test_resource")
+
+    @pytest.mark.asyncio
+    async def test_impl_issue_5_regression(self, provider_in_hub: Any) -> None:
+        """Test issue 5: Ensure custom validation skips when unknown values are present."""
+
+        class Issue5Resource(BaseResource):
+            config_class = SampleConfig
+
+            @classmethod
+            def get_schema(cls) -> s_resource:
+                return s_resource(
+                    attributes={
+                        "name": a_str(required=True),
+                        "count": a_num(optional=True),
+                    }
+                )
+
+            async def _validate_config(self, config: SampleConfig) -> list[str]:
+                # If unknown values were incorrectly converted to None, this would fail:
+                return ["`name` must not be empty."] if not config.name else []
+
+            async def read(self, ctx: Any) -> Any:
+                return ctx.state
+
+            async def _delete_apply(self, ctx: Any) -> None:
+                pass
+
+        hub.register("resource", "issue5_resource", Issue5Resource)
+
+        try:
+            schema = Issue5Resource.get_schema()
+            cty_type = schema.block.to_cty_type()
+            from pyvider.conversion import marshal
+            from pyvider.cty import CtyString, CtyValue
+
+            config_cty = cty_type.validate({"name": CtyValue.unknown(CtyString()), "count": 5})
+            config_dv = marshal(config_cty, schema=schema.block)
+            request = pb.ValidateResourceConfig.Request(
+                type_name="issue5_resource",
+                config=config_dv,
+            )
+            response = await _validate_resource_config_impl(request, context=None)
+
+            # The validation should be completely skipped, producing 0 diagnostics.
+            # If issue 5 happens, this would have a validation error "`name` must not be empty."
+            assert len(response.diagnostics) == 0
+        finally:
+            hub.unregister("resource", "issue5_resource")
 
     @pytest.mark.asyncio
     async def test_impl_creates_diagnostic_from_exception(self) -> None:
