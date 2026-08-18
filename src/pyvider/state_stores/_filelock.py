@@ -27,6 +27,8 @@ from pathlib import Path
 import time
 from typing import IO
 
+from provide.foundation import logger
+
 try:  # pragma: no cover - the fallback path is platform-specific
     import fcntl
 
@@ -41,6 +43,11 @@ DEFAULT_MUTEX_TIMEOUT_SECONDS = 10.0
 
 # Poll interval for the non-fcntl fallback.
 _FALLBACK_POLL_SECONDS = 0.01
+
+# Floor for treating a fallback sentinel as abandoned. Independent of the
+# caller's timeout so that a very short timeout cannot reclaim a sentinel a
+# live holder only just created.
+_MIN_SENTINEL_STALE_SECONDS = 30.0
 
 
 class FileMutexTimeoutError(TimeoutError):
@@ -78,14 +85,14 @@ def exclusive_file_mutex(
 def _acquire(handle: IO[bytes], path: Path, timeout: float) -> None:
     if HAVE_FCNTL:
         _acquire_fcntl(handle, path, timeout)
-    else:  # pragma: no cover - exercised only on non-POSIX hosts
+    else:
         _acquire_sentinel(path, timeout)
 
 
 def _release(handle: IO[bytes], path: Path) -> None:
     if HAVE_FCNTL:
         fcntl.lockf(handle.fileno(), fcntl.LOCK_UN)
-    else:  # pragma: no cover - exercised only on non-POSIX hosts
+    else:
         _sentinel_path(path).unlink(missing_ok=True)
 
 
@@ -105,11 +112,31 @@ def _acquire_fcntl(handle: IO[bytes], path: Path, timeout: float) -> None:
             time.sleep(_FALLBACK_POLL_SECONDS)
 
 
-def _sentinel_path(path: Path) -> Path:  # pragma: no cover - non-POSIX fallback
+def _sentinel_path(path: Path) -> Path:
     return path.with_name(path.name + ".mutex")
 
 
-def _acquire_sentinel(path: Path, timeout: float) -> None:  # pragma: no cover - non-POSIX fallback
+def _sentinel_is_stale(sentinel: Path, timeout: float) -> bool:
+    """Report whether a sentinel is old enough that its holder must be gone.
+
+    A POSIX record lock is owned by the kernel and released when the holder
+    dies. The sentinel is an ordinary file with no such guarantee, so a process
+    killed inside the critical section would otherwise wedge this state
+    forever -- defeating the very thing the lease expiry exists to prevent.
+
+    The critical section is a small read plus a small write, so a sentinel
+    older than the caller's whole timeout budget cannot belong to a live
+    holder that is merely slow.
+    """
+    try:
+        age = time.time() - sentinel.stat().st_mtime
+    except OSError:
+        # It vanished between the check and the stat: not stale, just gone.
+        return False
+    return age > max(timeout, _MIN_SENTINEL_STALE_SECONDS)
+
+
+def _acquire_sentinel(path: Path, timeout: float) -> None:
     sentinel = _sentinel_path(path)
     deadline = time.monotonic() + timeout
     while True:
@@ -118,6 +145,14 @@ def _acquire_sentinel(path: Path, timeout: float) -> None:  # pragma: no cover -
             os.close(fd)
             return
         except FileExistsError as exc:
+            if _sentinel_is_stale(sentinel, timeout):
+                logger.warning(
+                    "Reclaiming a stale state mutex sentinel",
+                    operation="acquire_file_mutex",
+                    path=str(path),
+                )
+                sentinel.unlink(missing_ok=True)
+                continue
             if time.monotonic() >= deadline:
                 raise FileMutexTimeoutError(
                     f"Timed out after {timeout}s waiting for the state mutex at {path}."

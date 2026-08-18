@@ -21,7 +21,7 @@ import time
 import pytest
 
 from pyvider.state_stores import FileSystemStateStore, StateLock, StateStoreError
-from pyvider.state_stores._filelock import FileMutexTimeoutError, exclusive_file_mutex
+from pyvider.state_stores._filelock import HAVE_FCNTL, FileMutexTimeoutError, exclusive_file_mutex
 from pyvider.state_stores.defaults import LOCK_FILE_SUFFIX
 from tests.state_stores import _lock_workers as workers
 
@@ -192,6 +192,7 @@ def test_the_mutex_times_out_when_another_process_holds_it(tmp_path: Path) -> No
         pass
 
 
+@pytest.mark.skipif(not HAVE_FCNTL, reason="POSIX record locks; the sentinel fallback has its own suite")
 def test_a_mutex_error_that_is_not_contention_is_re_raised(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

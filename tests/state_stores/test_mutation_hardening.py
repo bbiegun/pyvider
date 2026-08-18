@@ -28,7 +28,7 @@ from pyvider.state_stores import (
     StateStoreError,
     normalize_chunk_size,
 )
-from pyvider.state_stores._filelock import exclusive_file_mutex
+from pyvider.state_stores._filelock import HAVE_FCNTL, exclusive_file_mutex
 from pyvider.state_stores.defaults import DEFAULT_STATE_STORE_CHUNK_SIZE
 from pyvider.state_stores.filesystem import _config_root
 
@@ -183,6 +183,7 @@ async def test_locking_without_an_operation_stores_an_empty_one(tmp_path: Path) 
 # --- the mutex timeout message identifies which lock is stuck --------------
 
 
+@pytest.mark.skipif(not HAVE_FCNTL, reason="POSIX record locks; the sentinel fallback has its own suite")
 def test_the_mutex_timeout_message_names_the_contended_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

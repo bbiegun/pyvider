@@ -20,6 +20,10 @@ from pyvider.state_stores import FileSystemStateStore, StateLockConflictError
 from pyvider.state_stores._filelock import exclusive_file_mutex
 
 TYPE_NAME = "concurrent_store"
+
+#: Widens the read-modify-write window so that a missing lock reliably loses
+#: updates rather than only occasionally.
+RACE_WINDOW_SECONDS = 0.02
 STATE_ID = "shared"
 
 
@@ -72,6 +76,11 @@ def locked_increment(root: str, start_flag: str, iterations: int) -> int:
 
             raw = await store.read_state(TYPE_NAME, STATE_ID)
             value = int(raw.decode("utf-8")) if raw else 0
+            # Hold the read value across a visible interval before writing it
+            # back. Without this the read-modify-write is fast enough that
+            # unsynchronised workers can interleave without colliding, and the
+            # test would pass even with locking disabled -- proving nothing.
+            await asyncio.sleep(RACE_WINDOW_SECONDS)
             await store.write_state(TYPE_NAME, STATE_ID, str(value + 1).encode("utf-8"))
             applied += 1
             await store.unlock_state(TYPE_NAME, STATE_ID, lock.lock_id)

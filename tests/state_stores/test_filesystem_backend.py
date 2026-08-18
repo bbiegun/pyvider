@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import stat
+import sys
 
 import pytest
 
@@ -39,6 +40,14 @@ async def test_state_survives_a_new_backend_instance(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "chmod only toggles the read-only bit on Windows; it cannot restrict other "
+        "users, so the owner-only guarantee does not hold there. See the Windows "
+        "caveats in the state-store docs."
+    ),
+)
 async def test_payload_is_written_to_an_owner_only_file(store: FileSystemStateStore) -> None:
     await store.write_state(TYPE_NAME, "main", b"secret")
 

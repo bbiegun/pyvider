@@ -305,6 +305,23 @@ Locks are leases, not flags. A lock record is read and rewritten inside a POSIX 
 absolute expiry, so a provider that dies holding a lock does not wedge the state permanently. A lock
 request that collides with a live lease returns an error diagnostic rather than stealing it.
 
+##### Windows caveats
+
+The filesystem backend runs on Windows, but three POSIX guarantees weaken there. They are listed
+because each one silently degrades rather than failing loudly:
+
+| Guarantee | POSIX | Windows |
+|---|---|---|
+| Mutex released when the holder dies | Kernel-owned record lock, automatic | Sentinel file; reclaimed only after a staleness timeout |
+| State files readable only by their owner | `chmod 0600` enforced | `chmod` toggles the read-only bit only — **it cannot restrict other users** |
+| Directory entry fsynced after rename | `fsync` on the directory fd | Directories cannot be opened as file descriptors; the step is skipped |
+
+`os.replace` also differs: on Windows it fails if another process currently has the target file open,
+so a concurrent reader can make a write fail rather than being served the previous version.
+
+Treat a state directory on a multi-user Windows host as **not** access-controlled by this backend. Use
+filesystem ACLs, or a backend whose storage enforces its own access control.
+
 Backend selection for a store type, in order:
 
 1. a backend registered for that type name with `@register_state_store`
