@@ -11,7 +11,7 @@ from provide.foundation import logger
 
 from pyvider.common.encryption import decrypt
 from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_identity
-from pyvider.exceptions import PyviderError, ResourceError, Deferral
+from pyvider.exceptions import Deferral, PyviderError, ResourceError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import (
@@ -222,16 +222,21 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
         response.private = request.private
 
     except Deferral as e:
-        logger.info("Response deferred", operation="read_resource", resource_type=request.type_name, reason=e.reason.name)
+        logger.info(
+            "Response deferred",
+            operation="read_resource",
+            resource_type=request.type_name,
+            reason=e.reason.name,
+        )
         if not getattr(request.client_capabilities, "deferral_allowed", False):
             diag = pb.Diagnostic(
                 severity=pb.Diagnostic.ERROR,
                 summary="Invalid Deferral",
-                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request."
+                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request.",
             )
             response.diagnostics.append(diag)
         else:
-            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)
+            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)  # type: ignore[assignment]
     except PyviderError as e:
         logger.error(
             "ReadResource failed with framework error",

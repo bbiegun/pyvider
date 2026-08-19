@@ -13,7 +13,7 @@ from provide.foundation import logger
 from pyvider.conversion import marshal, unmarshal
 from pyvider.cty.exceptions import CtyValidationError
 from pyvider.ephemerals import EphemeralResourceContext
-from pyvider.exceptions import PyviderError, Deferral
+from pyvider.exceptions import Deferral, PyviderError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import create_diagnostic_from_exception, cty_to_attrs_instance
@@ -96,16 +96,21 @@ async def _open_ephemeral_resource_impl(
         )
 
     except Deferral as e:
-        logger.info("Response deferred", operation="open_ephemeral_resource", resource_type=request.type_name, reason=e.reason.name)
+        logger.info(
+            "Response deferred",
+            operation="open_ephemeral_resource",
+            resource_type=request.type_name,
+            reason=e.reason.name,
+        )
         if not getattr(request.client_capabilities, "deferral_allowed", False):
             diag = pb.Diagnostic(
                 severity=pb.Diagnostic.ERROR,
                 summary="Invalid Deferral",
-                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request."
+                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request.",
             )
             response.diagnostics.append(diag)
         else:
-            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)
+            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)  # type: ignore[assignment]
     except (CtyValidationError, PyviderError) as e:
         logger.error(
             "Ephemeral resource open failed with known error",

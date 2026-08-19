@@ -152,6 +152,7 @@ ignore = [
 # Complex protocol handlers - inherently complex due to Terraform protocol requirements
 "src/pyvider/cli/launch_context_command.py" = ["C901"]
 "src/pyvider/protocols/tfprotov6/handlers/utils.py" = ["C901"]
+"src/pyvider/protocols/tfprotov6/handlers/read_data_source.py" = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pyvider", "tests"]
