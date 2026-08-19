@@ -275,7 +275,7 @@ allowed_paths = [
 # invisible to consumers of the built wheel. CI passes --no-sources to verify the
 # published story instead.
 [tool.uv.sources]
-provide-foundation = { path = "../provide-foundation", editable = true }
-provide-testkit = { path = "../provide-testkit", editable = true }
-pyvider-cty = { path = "../pyvider-cty", editable = true }
-pyvider-rpcplugin = { path = "../pyvider-rpcplugin", editable = true }
+provide-foundation = { path = "../provide-foundation", editable = false }
+provide-testkit = { path = "../provide-testkit", editable = false }
+pyvider-cty = { path = "../pyvider-cty", editable = false }
+pyvider-rpcplugin = { path = "../pyvider-rpcplugin", editable = false }

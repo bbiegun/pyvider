@@ -2793,7 +2793,7 @@ wheels = [
 
 [[package]]
 name = "provide-foundation"
-source = { editable = "../provide-foundation" }
+source = { directory = "../provide-foundation" }
 dependencies = [
     { name = "attrs" },
     { name = "structlog" },
@@ -2825,14 +2825,14 @@ provides-extras = ["cli", "compression", "crypto", "transport", "opentelemetry",
 [package.metadata.requires-dev]
 dev = [
     { name = "memray", specifier = ">=1.0" },
-    { name = "provide-testkit", extras = ["advanced-testing", "build", "standard", "typecheck", "utils"], editable = "../provide-testkit" },
+    { name = "provide-testkit", extras = ["advanced-testing", "build", "standard", "typecheck", "utils"], directory = "../provide-testkit" },
 ]
-docs = [{ name = "provide-testkit", extras = ["docs"], editable = "../provide-testkit" }]
+docs = [{ name = "provide-testkit", extras = ["docs"], directory = "../provide-testkit" }]
 protobuf = [{ name = "protobuf", specifier = ">=6.32.0" }]
 
 [[package]]
 name = "provide-testkit"
-source = { editable = "../provide-testkit" }
+source = { directory = "../provide-testkit" }
 dependencies = [
     { name = "attrs" },
     { name = "click" },
@@ -2966,7 +2966,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'typecheck'" },
     { name = "pip-audit", marker = "extra == 'security'" },
     { name = "pre-commit", marker = "extra == 'build'" },
-    { name = "provide-foundation", editable = "../provide-foundation" },
+    { name = "provide-foundation", directory = "../provide-foundation" },
     { name = "provide-testkit", extras = ["advanced-testing", "build", "crypto", "docs", "fuzzing", "grpc", "process", "profiling", "quality", "security", "transport", "typecheck", "utils"], marker = "extra == 'all'", specifier = ">=0.4.0" },
     { name = "provide-testkit", extras = ["advanced-testing", "build", "grpc", "profiling", "security", "standard", "typecheck"], marker = "extra == 'pyvider-dev'", specifier = ">=0.4.0" },
     { name = "provide-testkit", extras = ["advanced-testing", "quality"], marker = "extra == 'dev'", specifier = ">=0.4.0" },
@@ -3514,21 +3514,21 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.83.0" },
     { name = "msgpack", specifier = ">=1.1.1" },
     { name = "protobuf", specifier = ">=7.35.1" },
-    { name = "provide-foundation", editable = "../provide-foundation" },
-    { name = "pyvider-cty", editable = "../pyvider-cty" },
-    { name = "pyvider-rpcplugin", editable = "../pyvider-rpcplugin" },
+    { name = "provide-foundation", directory = "../provide-foundation" },
+    { name = "pyvider-cty", directory = "../pyvider-cty" },
+    { name = "pyvider-rpcplugin", directory = "../pyvider-rpcplugin" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "grpcio-tools", specifier = ">=1.83.0" },
-    { name = "provide-testkit", extras = ["pyvider-dev"], editable = "../provide-testkit" },
+    { name = "provide-testkit", extras = ["pyvider-dev"], directory = "../provide-testkit" },
 ]
-docs = [{ name = "provide-testkit", extras = ["docs"], editable = "../provide-testkit" }]
+docs = [{ name = "provide-testkit", extras = ["docs"], directory = "../provide-testkit" }]
 
 [[package]]
 name = "pyvider-cty"
-source = { editable = "../pyvider-cty" }
+source = { directory = "../pyvider-cty" }
 dependencies = [
     { name = "attrs" },
     { name = "msgpack" },
@@ -3539,20 +3539,20 @@ dependencies = [
 requires-dist = [
     { name = "attrs", specifier = ">=25.3.0" },
     { name = "msgpack", specifier = ">=1.1.0" },
-    { name = "provide-foundation", editable = "../provide-foundation" },
+    { name = "provide-foundation", specifier = ">=0.4.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.148.8" },
     { name = "memray", marker = "sys_platform != 'emscripten'", specifier = ">=1.0" },
-    { name = "provide-testkit", extras = ["standard"], editable = "../provide-testkit" },
+    { name = "provide-testkit", extras = ["standard"], specifier = ">=0.4.0" },
 ]
-docs = [{ name = "provide-testkit", extras = ["docs"], editable = "../provide-testkit" }]
+docs = [{ name = "provide-testkit", extras = ["docs"], specifier = ">=0.4.0" }]
 
 [[package]]
 name = "pyvider-rpcplugin"
-source = { editable = "../pyvider-rpcplugin" }
+source = { directory = "../pyvider-rpcplugin" }
 dependencies = [
     { name = "attrs" },
     { name = "cryptography" },
@@ -3573,7 +3573,7 @@ requires-dist = [
     { name = "grpcio-health-checking", specifier = ">=1.78.0" },
     { name = "grpcio-tools", marker = "extra == 'test'", specifier = ">=1.73.0" },
     { name = "protobuf", specifier = ">=5.29.3" },
-    { name = "provide-foundation", editable = "../provide-foundation" },
+    { name = "provide-foundation", directory = "../provide-foundation" },
     { name = "pyvider-rpcplugin", extras = ["test"], marker = "extra == 'all'" },
     { name = "types-grpcio", marker = "extra == 'test'", specifier = ">=1.0.0.20250603" },
     { name = "types-protobuf", marker = "extra == 'test'", specifier = ">=6.30.2.20250516" },
@@ -3583,12 +3583,12 @@ provides-extras = ["test", "all"]
 [package.metadata.requires-dev]
 dev = [
     { name = "mkdocs-autorefs", specifier = ">=1.4.3" },
-    { name = "provide-testkit", extras = ["standard", "typecheck", "advanced-testing", "build", "profiling", "utils"], editable = "../provide-testkit" },
+    { name = "provide-testkit", extras = ["standard", "typecheck", "advanced-testing", "build", "profiling", "utils"], directory = "../provide-testkit" },
     { name = "pyvider-rpcplugin", extras = ["test"] },
 ]
 docs = [
     { name = "mkdocs-gen-files", specifier = ">=0.5.0" },
-    { name = "provide-testkit", extras = ["docs"], editable = "../provide-testkit" },
+    { name = "provide-testkit", extras = ["docs"], directory = "../provide-testkit" },
 ]
 
 [[package]]

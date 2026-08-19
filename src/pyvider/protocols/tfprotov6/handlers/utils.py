@@ -124,6 +124,33 @@ def get_all_components(component_type: str) -> dict[str, Any]:
     return hub.get_components(component_type)
 
 
+def is_test_mode_enabled() -> bool:
+    """Resolve whether test-only components are currently accessible.
+
+    The provider context is authoritative once ConfigureProvider has run, but it
+    does not exist before that. PYVIDER_TESTMODE is the fallback, and for schema
+    generation it is the *only* available signal: Terraform requests the provider
+    schema before it configures the provider, and that schema is computed once per
+    process. Without this fallback a test-only component can never reach the
+    schema, so `pyvider_testmode` in the provider block cannot reveal one either.
+    """
+    try:
+        provider_context = hub.get_component("singleton", "provider_context")
+        test_mode_enabled = bool(getattr(provider_context, "test_mode_enabled", False))
+    except (KeyError, AttributeError):
+        # No provider_context yet (pre-ConfigureProvider, or a unit test).
+        test_mode_enabled = False
+
+    if not test_mode_enabled:
+        from provide.foundation.config import get_env, parse_bool_extended
+
+        env_val = get_env("PYVIDER_TESTMODE", default=None)
+        if env_val:
+            test_mode_enabled = bool(parse_bool_extended(env_val))
+
+    return test_mode_enabled
+
+
 def get_filtered_components(component_type: str) -> dict[str, Any]:
     """
     Retrieves components of a given type, filtering out test-only components
@@ -133,13 +160,7 @@ def get_filtered_components(component_type: str) -> dict[str, Any]:
     """
     all_components = hub.get_components(component_type)
 
-    # Try to get provider context to check test mode, but don't fail if it doesn't exist
-    try:
-        provider_context = hub.get_component("singleton", "provider_context")
-        test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
-    except (KeyError, AttributeError):
-        # If provider_context doesn't exist (e.g., in unit tests), assume not in test mode
-        test_mode_enabled = False
+    test_mode_enabled = is_test_mode_enabled()
 
     if test_mode_enabled:
         logger.info(
@@ -190,22 +211,9 @@ def check_test_only_access(
     if not is_test_only:
         return  # Not test-only, access always allowed
 
-    # Get test mode status from provider context or environment variable.
-    # The env var is checked as a fallback when provider isn't configured yet
-    # (e.g., functions evaluated before ConfigureProvider RPC) or when the
-    # provider config didn't enable test mode but the env var does.
-    try:
-        provider_context = hub.get_component("singleton", "provider_context")
-        test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
-    except (KeyError, AttributeError):
-        test_mode_enabled = False
-
-    if not test_mode_enabled:
-        from provide.foundation.config import get_env, parse_bool_extended
-
-        env_val = get_env("PYVIDER_TESTMODE", default=None)
-        if env_val:
-            test_mode_enabled = parse_bool_extended(env_val)
+    # Test mode comes from the provider context once configured, and from the
+    # environment before that (e.g. functions evaluated before ConfigureProvider).
+    test_mode_enabled = is_test_mode_enabled()
 
     if test_mode_enabled:
         # Info-level — test-only component access is an auditable event
