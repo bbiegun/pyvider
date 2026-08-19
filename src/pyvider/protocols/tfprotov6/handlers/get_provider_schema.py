@@ -238,6 +238,12 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
             state_store_schemas=state_store_schemas,
             action_schemas=action_schemas,
             diagnostics=diagnostics,
+            server_capabilities=pb.ServerCapabilities(
+                plan_destroy=True,
+                get_provider_schema_optional=True,
+                move_resource_state=True,
+                generate_resource_config=True,
+            ),
         )
 
         logger.info(
