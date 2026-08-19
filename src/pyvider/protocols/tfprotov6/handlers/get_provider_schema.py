@@ -215,6 +215,11 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
         provider_schema = provider_instance.schema
         provider_proto_schema = await pvs_schema_to_proto(provider_schema)
 
+        provider_meta_schema = provider_instance.get_provider_meta_schema()
+        provider_meta_proto_schema = None
+        if provider_meta_schema is not None:
+            provider_meta_proto_schema = await pvs_schema_to_proto(provider_meta_schema)
+
         logger.debug(
             "Collecting component schemas",
             operation="compute_schema",
@@ -230,6 +235,7 @@ async def _compute_schema_once() -> pb.GetProviderSchema.Response:
 
         response = pb.GetProviderSchema.Response(
             provider=provider_proto_schema,
+            provider_meta=provider_meta_proto_schema,
             resource_schemas=resource_schemas,
             data_source_schemas=data_source_schemas,
             functions=functions,

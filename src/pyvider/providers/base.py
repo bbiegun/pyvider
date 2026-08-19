@@ -222,5 +222,10 @@ class BaseProvider:
             )
         return self._final_schema
 
+    @classmethod
+    def get_provider_meta_schema(cls) -> PvsSchema | None:
+        """Get the provider_meta schema. Defaults to None."""
+        return None
+
 
 # 🐍🏗️🔚

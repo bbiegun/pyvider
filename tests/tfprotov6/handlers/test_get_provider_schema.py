@@ -265,6 +265,43 @@ class TestComputeSchemaOnce:
             assert response.server_capabilities.move_resource_state is True
             assert response.server_capabilities.generate_resource_config is True
 
+
+    @pytest.mark.asyncio
+    async def test_computes_schema_with_provider_meta(self, mock_provider_instance) -> None:
+        """Test successful schema computation with provider_meta schema."""
+        with (
+            patch("pyvider.hub.hub.get_component") as mock_get_component,
+            patch(
+                "pyvider.protocols.tfprotov6.handlers.get_provider_schema.pvs_schema_to_proto"
+            ) as mock_to_proto,
+            patch(
+                "pyvider.protocols.tfprotov6.handlers.get_provider_schema._collect_resource_schemas"
+            ) as mock_resources,
+            patch(
+                "pyvider.protocols.tfprotov6.handlers.get_provider_schema._collect_data_source_schemas"
+            ) as mock_data_sources,
+            patch(
+                "pyvider.protocols.tfprotov6.handlers.get_provider_schema._collect_function_schemas"
+            ) as mock_functions,
+        ):
+            def side_effect(*args, **kwargs):
+                if args[1] == "provider":
+                    return mock_provider_instance
+                return None
+            mock_get_component.side_effect = side_effect
+            
+            mock_provider_instance.get_provider_meta_schema.return_value = MagicMock()
+            
+            mock_to_proto.return_value = pb.Schema()
+            mock_resources.return_value = {}
+            mock_data_sources.return_value = {}
+            mock_functions.return_value = {}
+
+            response = await _compute_schema_once()
+
+            assert isinstance(response, pb.GetProviderSchema.Response)
+            assert isinstance(response.provider_meta, pb.Schema)
+
     @pytest.mark.asyncio
     async def test_handles_missing_provider(self) -> None:
         """Test handling of missing provider instance."""
