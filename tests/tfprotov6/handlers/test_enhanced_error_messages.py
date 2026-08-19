@@ -111,28 +111,30 @@ class TestDataSourceErrorMessages:
             assert "PYVIDER_LOG_LEVEL=DEBUG" in error_message
 
     @pytest.mark.asyncio
-    async def test_validate_data_resource_missing_has_troubleshooting(self) -> None:
-        """Test that validation error includes troubleshooting steps."""
+    async def test_validate_data_resource_missing_names_the_type_and_what_exists(self) -> None:
+        """An unknown data source must return an actionable diagnostic.
+
+        The failure is nearly always a typo or a module that was never
+        imported, and both are answerable from the message itself: the name
+        that was asked for, and the names that are registered. Reporting a
+        generic internal error instead sends the practitioner to the provider
+        developers for something they could have fixed themselves.
+        """
         request = pb.ValidateDataResourceConfig.Request(type_name="test_data_source")
         request.config.CopyFrom(pb.DynamicValue(msgpack=b"\x80"))
 
-        with (
-            patch("pyvider.protocols.tfprotov6.handlers.validate_data_resource_config.hub") as mock_hub,
-            patch(
-                "pyvider.protocols.tfprotov6.handlers.validate_data_resource_config.create_diagnostic_from_exception"
-            ) as mock_diag,
-        ):
+        with patch("pyvider.protocols.tfprotov6.handlers.validate_data_resource_config.hub") as mock_hub:
             mock_hub.get_component.return_value = None
-            mock_diag.return_value = pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary="Test", detail="Test")
+            mock_hub.get_components.return_value = {"pyvider_real_data_source": object()}
 
-            await _validate_data_resource_config_impl(request, context=None)
+            response = await _validate_data_resource_config_impl(request, context=None)
 
-            # Verify the exception that was passed to create_diagnostic
-            called_exception = mock_diag.call_args[0][0]
-            error_message = str(called_exception)
-            assert "Troubleshooting:" in error_message
-            assert "1." in error_message  # Numbered steps
-            assert "2." in error_message
+            assert len(response.diagnostics) == 1
+            diagnostic = response.diagnostics[0]
+            assert diagnostic.severity == pb.Diagnostic.ERROR
+            assert "test_data_source" in diagnostic.summary
+            assert "pyvider_real_data_source" in diagnostic.detail
+            assert "@register_data_source" in diagnostic.detail
 
 
 class TestEphemeralResourceErrorMessages:

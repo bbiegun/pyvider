@@ -12,6 +12,7 @@ from pyvider.conversion import unmarshal
 from pyvider.cty.exceptions import CtyValidationError
 from pyvider.exceptions import PyviderError
 from pyvider.hub import hub
+from pyvider.protocols.tfprotov6.handlers._diagnostics import unknown_type_diagnostic
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import create_diagnostic_from_exception, cty_to_attrs_instance
 import pyvider.protocols.tfprotov6.protobuf as pb
@@ -48,17 +49,20 @@ async def _validate_data_resource_config_impl(
                 if hub.get_components("data_source")
                 else [],
             )
-            raise ValueError(
-                f"Data source type '{request.type_name}' not registered.\n\n"
-                f"Suggestion: Ensure the data source is registered using the @data_source decorator "
-                f"and that component discovery has completed successfully.\n\n"
-                f"Troubleshooting:\n"
-                f"  1. Check that the data source class has the @data_source decorator\n"
-                f"  2. Verify the data source module is imported by the provider\n"
-                f"  3. Run 'pyvider components list' to see registered data sources\n"
-                f"  4. Review provider logs for component registration errors\n"
-                f"  5. Enable debug logging: export PYVIDER_LOG_LEVEL=DEBUG"
+            # Return the diagnostic rather than raising: a bare exception is
+            # caught below and rendered as "Internal Provider Error", which
+            # hides the type name and the list of what *is* registered — the
+            # two things that let a practitioner fix a typo themselves. Actions
+            # and list resources already answer an unknown type this way.
+            response.diagnostics.append(
+                unknown_type_diagnostic(
+                    "data source",
+                    request.type_name,
+                    hub.get_components("data_source") or {},
+                    "@register_data_source",
+                )
             )
+            return response
 
         ds_schema = ds_class.get_schema()
         config_cty = unmarshal(request.config, schema=ds_schema.block)
