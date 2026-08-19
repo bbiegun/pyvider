@@ -393,7 +393,11 @@ class ProviderHandler(ProviderServicer):
             expected_total_length = 0
 
             async for request_chunk in request_iterator:
-                if request_chunk.meta:
+                # Presence, not truthiness: an unset submessage is still a
+                # truthy object, and Core sends meta on the first chunk only.
+                # Reading it unconditionally would blank the type name and
+                # state id on every later chunk of a multi-chunk write.
+                if request_chunk.HasField("meta"):
                     state_store_type = request_chunk.meta.type_name
                     state_id = request_chunk.meta.state_id
                 if request_chunk.bytes:

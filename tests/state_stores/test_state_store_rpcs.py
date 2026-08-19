@@ -61,6 +61,27 @@ async def _write(handler: ProviderHandler, state_id: str, payload: bytes) -> pb.
     return await handler.WriteStateBytes(chunks(), context=None)
 
 
+async def _write_chunked(
+    handler: ProviderHandler, state_id: str, payload: bytes, chunk_size: int
+) -> pb.WriteStateBytes.Response:
+    """Write a payload the way Core does: meta on the first chunk only."""
+
+    async def chunks() -> AsyncIterator[pb.WriteStateBytes.RequestChunk]:
+        total = len(payload)
+        for index, start in enumerate(range(0, total, chunk_size)):
+            end = min(start + chunk_size, total)
+            chunk = pb.WriteStateBytes.RequestChunk(
+                bytes=payload[start:end],
+                total_length=total,
+                range=pb.StateRange(start=start, end=end),
+            )
+            if index == 0:
+                chunk.meta.CopyFrom(pb.RequestChunkMeta(type_name=TYPE_NAME, state_id=state_id))
+            yield chunk
+
+    return await handler.WriteStateBytes(chunks(), context=None)
+
+
 async def _read(handler: ProviderHandler, state_id: str) -> list[pb.ReadStateBytes.Response]:
     request = pb.ReadStateBytes.Request(type_name=TYPE_NAME, state_id=state_id)
     return [response async for response in handler.ReadStateBytes(request, context=None)]
@@ -330,6 +351,55 @@ async def test_validate_passes_none_when_the_backend_declares_no_schema(
 
     assert list(response.diagnostics) == []
     assert seen == [None]
+
+
+@pytest.mark.asyncio
+async def test_a_multi_chunk_write_persists_the_whole_payload(
+    durable_backend: FileSystemStateStore,
+) -> None:
+    """Core sends meta on the first chunk only; later chunks carry bytes alone.
+
+    A submessage field is always truthy in protobuf-python whether or not it
+    was set, so reading meta without a presence check makes every chunk after
+    the first look like a chunk whose type_name and state_id are empty. That
+    turns any state larger than one chunk into a rejected write.
+    """
+    handler = ProviderHandler()
+    payload = bytes(range(256)) * 8  # 2 KiB, well past any plausible chunk size
+
+    response = await _write_chunked(handler, "chunked", payload, chunk_size=64)
+
+    assert list(response.diagnostics) == []
+    assert await durable_backend.read_state(TYPE_NAME, "chunked") == payload
+
+
+@pytest.mark.asyncio
+async def test_a_multi_chunk_write_reassembles_in_order(
+    durable_backend: FileSystemStateStore,
+) -> None:
+    """Reassembly must preserve byte order, not merely byte count."""
+    handler = ProviderHandler()
+    payload = b"".join(f"{index:04d}".encode() for index in range(500))
+
+    await _write_chunked(handler, "ordered", payload, chunk_size=7)
+    responses = await _read(handler, "ordered")
+
+    assert b"".join(r.bytes for r in responses) == payload
+
+
+@pytest.mark.asyncio
+async def test_a_write_with_no_metadata_at_all_is_rejected(
+    durable_backend: FileSystemStateStore,
+) -> None:
+    """Presence checking must not turn the genuine error case into a success."""
+    handler = ProviderHandler()
+
+    async def chunks() -> AsyncIterator[pb.WriteStateBytes.RequestChunk]:
+        yield pb.WriteStateBytes.RequestChunk(bytes=b"{}", total_length=2)
+
+    response = await handler.WriteStateBytes(chunks(), context=None)
+
+    assert [d for d in response.diagnostics if d.severity == pb.Diagnostic.ERROR]
 
 
 # 🐍🏗️🔚
