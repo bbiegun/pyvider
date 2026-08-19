@@ -10,7 +10,7 @@ from provide.foundation import logger
 
 from pyvider.conversion import marshal, unmarshal
 from pyvider.cty.exceptions import CtyValidationError
-from pyvider.exceptions import DataSourceError, PyviderError
+from pyvider.exceptions import DataSourceError, PyviderError, Deferral
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import (
@@ -158,6 +158,17 @@ async def _read_data_source_impl(
                 has_state=False,
             )
 
+    except Deferral as e:
+        logger.info("Response deferred", operation="read_data_source", data_source_type=request.type_name, reason=e.reason.name)
+        if not getattr(request.client_capabilities, "deferral_allowed", False):
+            diag = pb.Diagnostic(
+                severity=pb.Diagnostic.ERROR,
+                summary="Invalid Deferral",
+                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request."
+            )
+            response.diagnostics.append(diag)
+        else:
+            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)
     except (CtyValidationError, PyviderError) as e:
         logger.error(
             "Data source read failed with known error",

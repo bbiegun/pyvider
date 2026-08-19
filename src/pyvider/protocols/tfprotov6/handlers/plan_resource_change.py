@@ -16,7 +16,7 @@ from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_i
 from pyvider.conversion.marshaler import _apply_schema_marks_iterative
 from pyvider.cty import CtyObject, CtyValue
 from pyvider.cty.exceptions import CtyValidationError
-from pyvider.exceptions import PyviderError, ResourceError
+from pyvider.exceptions import PyviderError, ResourceError, Deferral
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import (
@@ -382,6 +382,17 @@ async def _plan_resource_change_impl(
             has_planned_private=bool(response.planned_private),
         )
 
+    except Deferral as e:
+        logger.info("Response deferred", operation="plan_resource_change", resource_type=request.type_name, reason=e.reason.name)
+        if not getattr(request.client_capabilities, "deferral_allowed", False):
+            diag = pb.Diagnostic(
+                severity=pb.Diagnostic.ERROR,
+                summary="Invalid Deferral",
+                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request."
+            )
+            response.diagnostics.append(diag)
+        else:
+            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)
     except (CtyValidationError, PyviderError) as e:
         logger.error(
             "PlanResourceChange failed with framework error",
