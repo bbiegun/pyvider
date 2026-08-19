@@ -18,6 +18,7 @@ from typing import Any
 from provide.foundation import logger
 
 from pyvider.protocols.tfprotov6.handlers._component_config import decode_component_config
+from pyvider.protocols.tfprotov6.handlers._diagnostics import error_diagnostic
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.state_stores import (
@@ -91,9 +92,7 @@ async def ValidateStateStoreConfigHandler(
             ]
         )
 
-    return pb.ValidateStateStore.Response(
-        diagnostics=[pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=message) for message in errors]
-    )
+    return pb.ValidateStateStore.Response(diagnostics=[error_diagnostic(message) for message in errors])
 
 
 @rpc_handler("ConfigureStateStore")

@@ -12,7 +12,7 @@ provider yields them rather than collected first.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
 from provide.foundation import logger
@@ -20,6 +20,11 @@ from provide.foundation import logger
 from pyvider.conversion import marshal, marshal_identity
 from pyvider.list_resources import ListResourceContext, ListResult
 from pyvider.protocols.tfprotov6.handlers._component_config import decode_component_config
+from pyvider.protocols.tfprotov6.handlers._diagnostics import (
+    error_diagnostic,
+    unknown_type_diagnostic,
+    warning_diagnostic,
+)
 from pyvider.protocols.tfprotov6.handlers.utils import get_filtered_components
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.schema import PvsSchema
@@ -27,8 +32,12 @@ from pyvider.schema import PvsSchema
 
 def _error_event(summary: str, detail: str = "") -> pb.ListResource.Event:
     """Report a failure through the stream, which has no response message."""
+    return pb.ListResource.Event(diagnostic=[error_diagnostic(summary, detail)])
+
+
+def _unknown_list_resource_event(type_name: str, registered: Iterable[str]) -> pb.ListResource.Event:
     return pb.ListResource.Event(
-        diagnostic=[pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=summary, detail=detail)]
+        diagnostic=[unknown_type_diagnostic("list resource", type_name, registered, "@register_list_resource")]
     )
 
 
@@ -42,9 +51,7 @@ def _build_event(
     event = pb.ListResource.Event(
         identity=marshal_identity(result.identity, identity_schema),
         display_name=result.display_name,
-        diagnostic=[
-            pb.Diagnostic(severity=pb.Diagnostic.WARNING, summary=warning) for warning in result.warnings
-        ],
+        diagnostic=[warning_diagnostic(warning) for warning in result.warnings],
     )
 
     if include_resource_object and result.resource_object is not None and resource_object_schema is not None:
@@ -77,11 +84,7 @@ async def stream_list_resource(
             request_type=request.type_name,
             registered=sorted(registered),
         )
-        yield _error_event(
-            f"Unknown list resource type '{request.type_name}'",
-            "Register it with @register_list_resource. Registered list resource types: "
-            + ", ".join(sorted(registered)),
-        )
+        yield _unknown_list_resource_event(request.type_name, registered)
         return
 
     identity_schema = list_resource_class.get_identity_schema()

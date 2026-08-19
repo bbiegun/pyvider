@@ -178,7 +178,14 @@ def _create_resource_context(
 ) -> ResourceContext:
     config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class)
     prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
-    planned_state_instance = cty_to_attrs_instance(planned_state_cty, resource_class.state_class)
+    # allow_unknown: during apply the planned state legitimately carries
+    # unknowns for computed attributes the provider is about to fill in.
+    # Collapsing it to None here would be read as "no planned state" by
+    # BaseResource.apply, which treats that as a destroy -- so a create would
+    # silently delete instead.
+    planned_state_instance = cty_to_attrs_instance(
+        planned_state_cty, resource_class.state_class, allow_unknown=True
+    )
 
     provider_context = hub.get_component("singleton", "provider_context")
     test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)

@@ -583,7 +583,9 @@ async def create_diagnostic_from_exception(exc: Exception) -> pb.Diagnostic:
     )
 
 
-def cty_to_attrs_instance(cty_val: CtyValue | None, attrs_cls: type[Any] | None) -> Any | None:
+def cty_to_attrs_instance(
+    cty_val: CtyValue | None, attrs_cls: type[Any] | None, *, allow_unknown: bool = False
+) -> Any | None:
     """Convert a CtyValue into an instance of the given attrs-based class.
 
     The framework converts Terraform configuration/state shapes into
@@ -593,10 +595,17 @@ def cty_to_attrs_instance(cty_val: CtyValue | None, attrs_cls: type[Any] | None)
     produce empty or malformed values — so we reject them up front with
     a clear FrameworkConfigurationError, not a confusing failure later
     in the conversion layer.
+
+    By default a value that is not wholly known converts to None, so that a
+    provider's custom validator is never handed a half-known object (issue #5).
+    That is a *validation* policy, and it is wrong anywhere None already means
+    something else. Pass ``allow_unknown=True`` there: ``from_cty`` handles
+    unknowns per attribute, yielding an instance whose not-yet-known fields are
+    None rather than collapsing the whole object.
     """
     if attrs_cls is None:
         return None
-    if cty_val is not None and not cty_val.is_wholly_known():
+    if not allow_unknown and cty_val is not None and not cty_val.is_wholly_known():
         return None
     if not inspect.isclass(attrs_cls):
         raise TypeError("Internal validation error: Passed object must be a class.")

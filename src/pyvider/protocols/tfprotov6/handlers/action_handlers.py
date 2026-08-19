@@ -14,21 +14,19 @@ from provide.foundation import logger
 
 from pyvider.actions import ActionContext, BaseAction
 from pyvider.protocols.tfprotov6.handlers._component_config import decode_component_config
+from pyvider.protocols.tfprotov6.handlers._diagnostics import (
+    error_diagnostic,
+    unknown_type_diagnostic,
+    warning_diagnostic,
+)
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import get_filtered_components
 import pyvider.protocols.tfprotov6.protobuf as pb
 
 
-def _error(summary: str, detail: str = "") -> pb.Diagnostic:
-    return pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=summary, detail=detail)
-
-
 def _unknown_action_diagnostic(action_type: str) -> pb.Diagnostic:
-    registered = sorted(get_filtered_components("action"))
-    return _error(
-        f"Unknown action type '{action_type}'",
-        "Register it with @register_action. Registered action types: "
-        + (", ".join(registered) if registered else "(none)"),
+    return unknown_type_diagnostic(
+        "action", action_type, get_filtered_components("action"), "@register_action"
     )
 
 
@@ -58,12 +56,10 @@ async def ValidateActionConfigHandler(
             error_message=str(exc),
         )
         return pb.ValidateActionConfig.Response(
-            diagnostics=[_error(f"Invalid configuration for action '{request.type_name}'", str(exc))]
+            diagnostics=[error_diagnostic(f"Invalid configuration for action '{request.type_name}'", str(exc))]
         )
 
-    return pb.ValidateActionConfig.Response(
-        diagnostics=[pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=message) for message in errors]
-    )
+    return pb.ValidateActionConfig.Response(diagnostics=[error_diagnostic(message) for message in errors])
 
 
 @rpc_handler("PlanAction")
@@ -91,14 +87,10 @@ async def PlanActionHandler(request: pb.PlanAction.Request, context: Any) -> pb.
             exc_info=True,
         )
         return pb.PlanAction.Response(
-            diagnostics=[_error(f"Action '{request.action_type}' could not be planned", str(exc))]
+            diagnostics=[error_diagnostic(f"Action '{request.action_type}' could not be planned", str(exc))]
         )
 
-    response = pb.PlanAction.Response(
-        diagnostics=[
-            pb.Diagnostic(severity=pb.Diagnostic.WARNING, summary=warning) for warning in plan.warnings
-        ]
-    )
+    response = pb.PlanAction.Response(diagnostics=[warning_diagnostic(warning) for warning in plan.warnings])
 
     if plan.defer is not None:
         if not ctx.deferral_allowed:
@@ -106,7 +98,7 @@ async def PlanActionHandler(request: pb.PlanAction.Request, context: Any) -> pb.
             # action that defers anyway is reported as an error the practitioner
             # can act on rather than a response Terraform will refuse.
             response.diagnostics.append(
-                _error(
+                error_diagnostic(
                     f"Action '{request.action_type}' deferred but the client does not allow deferrals",
                     "Terraform did not set deferral_allowed for this request.",
                 )
@@ -154,7 +146,9 @@ async def stream_invoke_action(
             error_type=type(exc).__name__,
             error_message=str(exc),
         )
-        yield _completed([_error(f"Invalid configuration for action '{request.action_type}'", str(exc))])
+        yield _completed(
+            [error_diagnostic(f"Invalid configuration for action '{request.action_type}'", str(exc))]
+        )
         return
 
     ctx: ActionContext[Any] = ActionContext(
@@ -178,7 +172,7 @@ async def stream_invoke_action(
             error_message=str(exc),
             exc_info=True,
         )
-        yield _completed([_error(f"Action '{request.action_type}' failed", str(exc))])
+        yield _completed([error_diagnostic(f"Action '{request.action_type}' failed", str(exc))])
         return
 
     logger.info(

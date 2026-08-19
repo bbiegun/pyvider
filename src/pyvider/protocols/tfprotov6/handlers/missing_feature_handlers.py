@@ -20,6 +20,10 @@ from provide.foundation import logger
 
 from pyvider.conversion import marshal, unmarshal
 from pyvider.protocols.tfprotov6.handlers._component_config import decode_component_config
+from pyvider.protocols.tfprotov6.handlers._diagnostics import (
+    error_diagnostic,
+    unknown_type_diagnostic,
+)
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.action_handlers import (
     PlanActionHandler,
@@ -67,20 +71,6 @@ __all__ = [
 ]
 
 
-def _error(summary: str, detail: str = "") -> pb.Diagnostic:
-    return pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=summary, detail=detail)
-
-
-def _unknown_type_diagnostic(
-    kind: str, type_name: str, registered: list[str], decorator: str
-) -> pb.Diagnostic:
-    return _error(
-        f"Unknown {kind} type '{type_name}'",
-        f"Register it with {decorator}. Registered {kind} types: "
-        + (", ".join(sorted(registered)) if registered else "(none)"),
-    )
-
-
 @rpc_handler("GenerateResourceConfig")
 async def GenerateResourceConfigHandler(
     request: pb.GenerateResourceConfig.Request, context: Any
@@ -91,7 +81,7 @@ async def GenerateResourceConfigHandler(
     if resource_class is None:
         return pb.GenerateResourceConfig.Response(
             diagnostics=[
-                _unknown_type_diagnostic("resource", request.type_name, list(resources), "@register_resource")
+                unknown_type_diagnostic("resource", request.type_name, list(resources), "@register_resource")
             ]
         )
 
@@ -120,7 +110,9 @@ async def GenerateResourceConfigHandler(
         )
         return pb.GenerateResourceConfig.Response(
             diagnostics=[
-                _error(f"Could not generate configuration for resource '{request.type_name}'", str(exc))
+                error_diagnostic(
+                    f"Could not generate configuration for resource '{request.type_name}'", str(exc)
+                )
             ]
         )
 
@@ -141,7 +133,7 @@ async def GenerateResourceConfigHandler(
         )
         return pb.GenerateResourceConfig.Response(
             diagnostics=[
-                _error(
+                error_diagnostic(
                     f"Generated configuration for resource '{request.type_name}' is not valid",
                     str(exc),
                 )
@@ -171,7 +163,7 @@ async def ValidateListResourceConfigHandler(
     if list_resource_class is None:
         return pb.ValidateListResourceConfig.Response(
             diagnostics=[
-                _unknown_type_diagnostic(
+                unknown_type_diagnostic(
                     "list resource", request.type_name, list(registered), "@register_list_resource"
                 )
             ]
@@ -189,11 +181,13 @@ async def ValidateListResourceConfigHandler(
             error_message=str(exc),
         )
         return pb.ValidateListResourceConfig.Response(
-            diagnostics=[_error(f"Invalid configuration for list resource '{request.type_name}'", str(exc))]
+            diagnostics=[
+                error_diagnostic(f"Invalid configuration for list resource '{request.type_name}'", str(exc))
+            ]
         )
 
     return pb.ValidateListResourceConfig.Response(
-        diagnostics=[pb.Diagnostic(severity=pb.Diagnostic.ERROR, summary=message) for message in errors]
+        diagnostics=[error_diagnostic(message) for message in errors]
     )
 
 
