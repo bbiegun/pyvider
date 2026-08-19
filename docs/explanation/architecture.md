@@ -338,7 +338,7 @@ from pyvider.state_stores import BaseStateStore, register_state_store
 class S3StateStore(BaseStateStore):
     async def read_state(self, type_name: str, state_id: str) -> bytes | None: ...
     async def write_state(self, type_name: str, state_id: str, payload: bytes) -> None: ...
-    # ... plus delete_state, list_states, lock_state, unlock_state, renew_lock, get_lock
+    # ... plus delete_state, list_states, lock_state, unlock_state, get_lock
 ```
 
 #### List resources (`pyvider.list_resources`)

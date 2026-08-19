@@ -91,30 +91,6 @@ class InMemoryStateStore(BaseStateStore):
             del self._locks[key]
             return True
 
-    async def renew_lock(
-        self,
-        type_name: str,
-        state_id: str,
-        lock_id: str,
-        ttl_seconds: float = DEFAULT_LOCK_TTL_SECONDS,
-    ) -> StateLock | None:
-        now = time.time()
-        with self._mutex:
-            key = self._key(type_name, state_id)
-            existing = self._locks.get(key)
-            if existing is None or existing.lock_id != lock_id:
-                return None
-            renewed = StateLock(
-                lock_id=existing.lock_id,
-                type_name=existing.type_name,
-                state_id=existing.state_id,
-                operation=existing.operation,
-                holder=existing.holder,
-                acquired_at=existing.acquired_at,
-                expires_at=now + ttl_seconds if ttl_seconds > 0 else 0.0,
-            )
-            self._locks[key] = renewed
-            return renewed
 
     async def get_lock(self, type_name: str, state_id: str) -> StateLock | None:
         now = time.time()
