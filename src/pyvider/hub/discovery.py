@@ -144,6 +144,10 @@ class ComponentDiscovery:
                         "_is_registered_data_source",
                         "_is_registered_function",
                         "_is_registered_capability",
+                        "_is_registered_ephemeral_resource",
+                        "_is_registered_list_resource",
+                        "_is_registered_state_store",
+                        "_is_registered_action",
                     )
                 ):
                     logger.warning(
@@ -162,6 +166,15 @@ class ComponentDiscovery:
                 ("_is_registered_data_source", "data_source"),
                 ("_is_registered_function", "function"),
                 ("_is_registered_capability", "capability"),
+                # The tfprotov6.11 component types register themselves into the
+                # hub singleton from their decorators. Listing them here as well
+                # is what lets a caller-supplied registry (plating's docs pass,
+                # tests) see them: without it those dimensions exist only in the
+                # singleton and any injected registry silently reports zero.
+                ("_is_registered_ephemeral_resource", "ephemeral_resource"),
+                ("_is_registered_list_resource", "list_resource"),
+                ("_is_registered_state_store", "state_store"),
+                ("_is_registered_action", "action"),
             ]
             for marker, comp_type in reg_checks:
                 if getattr(obj, marker, False):
