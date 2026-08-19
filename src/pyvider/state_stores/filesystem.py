@@ -249,7 +249,6 @@ class FileSystemStateStore(BaseStateStore):
             _write_lease(handle, None)
             return True
 
-
     async def get_lock(self, type_name: str, state_id: str) -> StateLock | None:
         return await asyncio.to_thread(self._get_lock_sync, type_name, state_id)
 

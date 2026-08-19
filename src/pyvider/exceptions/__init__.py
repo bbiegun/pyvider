@@ -16,6 +16,7 @@ from pyvider.exceptions.base import (
     UnsupportedTypeError,
     WireFormatError,
 )
+from pyvider.exceptions.deferral import Deferral
 from pyvider.exceptions.function import (
     FunctionError,
     FunctionRegistrationError,
@@ -57,7 +58,6 @@ from pyvider.exceptions.serialization import (
     DeserializationError,
     SerializationError,
 )
-from pyvider.exceptions.deferral import Deferral
 from pyvider.exceptions.validation import (
     AttributeValidationError,
     ValidationError,

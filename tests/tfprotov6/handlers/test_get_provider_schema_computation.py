@@ -35,10 +35,12 @@ class TestComputeSchemaOnce:
                 "pyvider.protocols.tfprotov6.handlers.get_provider_schema._collect_function_schemas"
             ) as mock_functions,
         ):
+
             def side_effect(*args, **kwargs):
                 if args[1] == "provider":
                     return mock_provider_instance
                 return None
+
             mock_get_component.side_effect = side_effect
             mock_to_proto.return_value = pb.Schema()
             mock_resources.return_value = {}

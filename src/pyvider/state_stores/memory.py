@@ -91,7 +91,6 @@ class InMemoryStateStore(BaseStateStore):
             del self._locks[key]
             return True
 
-
     async def get_lock(self, type_name: str, state_id: str) -> StateLock | None:
         now = time.time()
         with self._mutex:

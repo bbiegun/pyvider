@@ -6,9 +6,10 @@
 from pyvider.actions.types import DeferralReason
 from pyvider.exceptions.base import PyviderError
 
+
 class Deferral(PyviderError):
     """Raised to indicate that a response should be deferred.
-    
+
     This exception allows handlers to abort processing and signal Terraform
     that the operation cannot complete yet, avoiding the need to change every
     return type in the provider interface.
@@ -20,5 +21,6 @@ class Deferral(PyviderError):
 
     def _default_code(self) -> str:
         return "DEFERRED"
+
 
 # 🐍🏗️🔚
