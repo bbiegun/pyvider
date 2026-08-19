@@ -249,35 +249,6 @@ class FileSystemStateStore(BaseStateStore):
             _write_lease(handle, None)
             return True
 
-    async def renew_lock(
-        self,
-        type_name: str,
-        state_id: str,
-        lock_id: str,
-        ttl_seconds: float = DEFAULT_LOCK_TTL_SECONDS,
-    ) -> StateLock | None:
-        return await asyncio.to_thread(self._renew_lock_sync, type_name, state_id, lock_id, ttl_seconds)
-
-    def _renew_lock_sync(
-        self, type_name: str, state_id: str, lock_id: str, ttl_seconds: float
-    ) -> StateLock | None:
-        path = self._lock_path(type_name, state_id)
-        now = time.time()
-        with exclusive_file_mutex(path, file_mode=STATE_FILE_MODE) as handle:
-            existing = _read_lease(handle)
-            if existing is None or existing.lock_id != lock_id:
-                return None
-            renewed = StateLock(
-                lock_id=existing.lock_id,
-                type_name=existing.type_name,
-                state_id=existing.state_id,
-                operation=existing.operation,
-                holder=existing.holder,
-                acquired_at=existing.acquired_at,
-                expires_at=now + ttl_seconds if ttl_seconds > 0 else 0.0,
-            )
-            _write_lease(handle, renewed)
-            return renewed
 
     async def get_lock(self, type_name: str, state_id: str) -> StateLock | None:
         return await asyncio.to_thread(self._get_lock_sync, type_name, state_id)

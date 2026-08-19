@@ -98,16 +98,6 @@ class BaseStateStore(ABC):
         """
 
     @abstractmethod
-    async def renew_lock(
-        self,
-        type_name: str,
-        state_id: str,
-        lock_id: str,
-        ttl_seconds: float = DEFAULT_LOCK_TTL_SECONDS,
-    ) -> StateLock | None:
-        """Extend a lease held by ``lock_id``, or None if it is no longer held."""
-
-    @abstractmethod
     async def get_lock(self, type_name: str, state_id: str) -> StateLock | None:
         """Return the live lease over a state, or None when unlocked."""
 

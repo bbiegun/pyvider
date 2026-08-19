@@ -146,24 +146,6 @@ async def test_unlock_when_unlocked_is_refused(backend: BaseStateStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_renew_extends_lease_for_holder(backend: BaseStateStore) -> None:
-    lock = await backend.lock_state(TYPE_NAME, "main", "plan", ttl_seconds=1)
-
-    renewed = await backend.renew_lock(TYPE_NAME, "main", lock.lock_id, ttl_seconds=120)
-
-    assert renewed is not None
-    assert renewed.lock_id == lock.lock_id
-    assert renewed.expires_at > lock.expires_at
-
-
-@pytest.mark.asyncio
-async def test_renew_rejects_non_holder(backend: BaseStateStore) -> None:
-    await backend.lock_state(TYPE_NAME, "main", "plan", ttl_seconds=60)
-
-    assert await backend.renew_lock(TYPE_NAME, "main", "someone-else", ttl_seconds=120) is None
-
-
-@pytest.mark.asyncio
 async def test_get_lock_reports_expired_lease_as_unlocked(backend: BaseStateStore) -> None:
     await backend.lock_state(TYPE_NAME, "main", "plan", ttl_seconds=0.01)
     time.sleep(0.05)
