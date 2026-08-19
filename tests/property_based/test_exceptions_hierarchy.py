@@ -55,6 +55,13 @@ def test_exception_instantiation_and_str(exc_class: type[Exception]) -> None:
     """Tests basic instantiation and string conversion of all exceptions."""
     try:
         exceptions_with_specific_constructors = [
+            # Deferral's first argument is a DeferralReason, not a message: it
+            # reads `reason.name` to record which deferral this is. Handing it a
+            # string is a type error the annotation already rules out, so the
+            # generic "construct it with a message" path below does not apply.
+            # Its real contract is exercised in tfprotov6/handlers/test_deferral.py
+            # and end to end in the action conformance tests.
+            pyvider_exceptions_module.Deferral,
             pyvider_exceptions_module.InvalidTypeError,
             pyvider_exceptions_module.UnsupportedTypeError,
             pyvider_exceptions_module.SchemaValidationError,
