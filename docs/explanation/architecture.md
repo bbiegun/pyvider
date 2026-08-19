@@ -244,6 +244,15 @@ Pyvider implements the Terraform Plugin Protocol v6 specification, including the
 list-resource, and action RPCs. Each of those dispatches to a provider-defined component rather than
 returning a generic response, and state is durable by default:
 
+### Client Capabilities
+
+Terraform 1.13+ introduced several capability flags in `ClientCapabilities` that inform the provider of what the CLI supports. Pyvider handles these as follows:
+
+- **`deferral_allowed`**: Honored. When true, providers may raise a `Deferral` exception to defer the request; when false, raising a deferral results in an error diagnostic.
+- **`write_only_attributes_allowed`**: Deliberately ignored. Pyvider unconditionally nullifies `write_only` attributes on outbound state responses. This is the safest default because old Terraform versions that do not support this capability would otherwise store the write-only (secret) value in plain text in the state file.
+- **`store_planned_private`**: Deliberately ignored. Pyvider always emits private state regardless of client support. Unsupported clients will simply drop it, and providers must remain robust to its absence during `ApplyResourceChange`.
+- **`computed_blocks_allowed`**: Deliberately ignored. The provider schema is statically defined upfront and cannot conditionally adapt its structure in `PlanResourceChange` based on a capability flag. Unsupported clients will error during schema validation.
+
 #### Supported RPCs
 
 | RPC Method | Purpose | Pyvider Support |
