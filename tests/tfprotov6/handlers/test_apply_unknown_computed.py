@@ -152,4 +152,41 @@ def test_allow_unknown_converts_instead_of_collapsing() -> None:
     assert instance.generated is None
 
 
+@pytest.mark.asyncio
+async def test_a_config_with_an_unknown_required_value_plans_a_create(widget: Any) -> None:
+    """`name = other_resource.computed` is unknown at plan time, not absent.
+
+    This is the ordinary way one resource depends on another, and Terraform
+    rejects the whole plan when the provider answers it with absence:
+
+        Provider produced invalid plan ... planned for absence but config
+        wants existence
+
+    The same converter policy behind the apply regression reaches plan through
+    the config and proposed-new-state conversions, and BaseResource.plan reads
+    "no config and no planned state" as a delete.
+    """
+    from pyvider.cty import CtyString, CtyValue
+
+    block = widget.get_schema().block
+    config = marshal(
+        block.to_cty_type().validate(
+            {"name": CtyValue.unknown(CtyString()), "generated": CtyValue.unknown(CtyString())}
+        ),
+        schema=block,
+    )
+
+    plan = await PlanResourceChangeHandler(
+        pb.PlanResourceChange.Request(type_name=RESOURCE, config=config, proposed_new_state=config),
+        context=None,
+    )
+
+    assert not plan.diagnostics, f"plan failed: {plan.diagnostics}"
+    planned = unmarshal(plan.planned_state, schema=block)
+    assert not planned.is_null, (
+        "plan returned a null state for a config whose values are merely unknown; "
+        "Terraform reads that as 'planned for absence but config wants existence'"
+    )
+
+
 # 🐍🏗️🔚

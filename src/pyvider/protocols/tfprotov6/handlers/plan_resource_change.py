@@ -143,10 +143,20 @@ def _create_resource_context(
     identity_schema: PvsSchema | None = None,
     prior_identity: pb.ResourceIdentityData | None = None,
 ) -> ResourceContext:
-    # Try to create attrs instances, but they may return None if values are unknown/computed
+    # config and prior state keep the default policy: a config that is not
+    # wholly known collapses to None, so a provider's custom validator is never
+    # handed a half-known object (issue #5).
     config_instance = cty_to_attrs_instance(config_cty_marked, resource_class.config_class)
     prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
-    proposed_new_state_instance = cty_to_attrs_instance(proposed_new_state_cty, resource_class.state_class)
+    # The proposed new state must NOT collapse. `BaseResource.plan` reads "no
+    # config and no planned state" as a delete, so a config carrying an unknown
+    # -- the ordinary `name = other_resource.computed` dependency -- would plan
+    # absence, and Terraform rejects the whole plan with "planned for absence
+    # but config wants existence". `from_cty` handles unknowns per attribute,
+    # yielding an instance whose not-yet-known fields are None.
+    proposed_new_state_instance = cty_to_attrs_instance(
+        proposed_new_state_cty, resource_class.state_class, allow_unknown=True
+    )
 
     provider_context = hub.get_component("singleton", "provider_context")
     test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
