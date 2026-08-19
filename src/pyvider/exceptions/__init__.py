@@ -57,6 +57,7 @@ from pyvider.exceptions.serialization import (
     DeserializationError,
     SerializationError,
 )
+from pyvider.exceptions.deferral import Deferral
 from pyvider.exceptions.validation import (
     AttributeValidationError,
     ValidationError,
@@ -70,6 +71,7 @@ __all__ = [
     "ComponentRegistryError",
     "ConversionError",
     "DataSourceError",
+    "Deferral",
     "DeserializationError",
     "FrameworkConfigurationError",
     # Function
