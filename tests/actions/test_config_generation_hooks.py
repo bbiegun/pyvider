@@ -16,7 +16,7 @@ import pytest
 from pyvider.conversion import marshal, unmarshal
 from pyvider.hub import hub
 from pyvider.list_resources import BaseListResource, ListResourceContext, ListResult
-from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import (
+from pyvider.protocols.tfprotov6.handlers.config_handlers import (
     GenerateResourceConfigHandler,
     ValidateListResourceConfigHandler,
 )
