@@ -269,13 +269,13 @@ allowed_paths = [
     "pyvider.toml",
 ]
 
-# Local development resolves sibling suite packages from source, so a change in
-# one repo is exercised by its consumers immediately rather than at release. uv
-# does not propagate a dependency's sources into published metadata, so this is
-# invisible to consumers of the built wheel. CI passes --no-sources to verify the
-# published story instead.
-[tool.uv.sources]
-provide-foundation = { path = "../provide-foundation", editable = false }
-provide-testkit = { path = "../provide-testkit", editable = false }
-pyvider-cty = { path = "../pyvider-cty", editable = false }
-pyvider-rpcplugin = { path = "../pyvider-rpcplugin", editable = false }
+# No `[tool.uv.sources]`. Local sibling checkouts are installed with
+# `uv pip install -e ../pyvider-cty` rather than pinned as a path source here,
+# so this file describes only what a published install resolves -- the same
+# thing pyvider-cty and tofusoup say, and for the same reason.
+#
+# It is not only a preference. The release workflow calls ci-tooling's
+# `python-release.yml`, which has no `no-sources` input to pass (checked against
+# v0.4.2, the newest tag), so a path source here fails the release outright:
+# "Failed to generate package metadata for `provide-foundation @ ../provide-foundation`".
+# That is exactly how tofusoup's first v0.5.0 attempt died.
