@@ -12,7 +12,7 @@ from provide.foundation import logger
 
 from pyvider.common.encryption import decrypt, encrypt
 from pyvider.common.operation_context import OperationContext, operation_context
-from pyvider.conversion import marshal, unmarshal
+from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_identity
 from pyvider.conversion.marshaler import _apply_schema_marks_iterative
 from pyvider.cty.exceptions import CtyValidationError
 from pyvider.exceptions import (
@@ -31,10 +31,13 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
     check_test_only_access,
     create_diagnostic_from_exception,
     cty_to_attrs_instance,
+    derive_identity_values,
     is_valid_refinement,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
+from pyvider.schema import PvsSchema
 
 
 async def _get_resource_and_provider_instances(type_name: str) -> tuple[Any, Any]:
@@ -169,10 +172,20 @@ def _create_resource_context(
     private_state_instance: Any,
     resource_class: Any,
     provider_instance: Any,
+    *,
+    identity_schema: PvsSchema | None = None,
+    planned_identity: pb.ResourceIdentityData | None = None,
 ) -> ResourceContext:
     config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class)
     prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
-    planned_state_instance = cty_to_attrs_instance(planned_state_cty, resource_class.state_class)
+    # allow_unknown: during apply the planned state legitimately carries
+    # unknowns for computed attributes the provider is about to fill in.
+    # Collapsing it to None here would be read as "no planned state" by
+    # BaseResource.apply, which treats that as a destroy -- so a create would
+    # silently delete instead.
+    planned_state_instance = cty_to_attrs_instance(
+        planned_state_cty, resource_class.state_class, allow_unknown=True
+    )
 
     provider_context = hub.get_component("singleton", "provider_context")
     test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
@@ -185,6 +198,9 @@ def _create_resource_context(
         config_cty=config_cty,
         capabilities=provider_instance.metadata.capabilities,
         test_mode_enabled=test_mode_enabled,
+        identity=(
+            unmarshal_identity(planned_identity, identity_schema) if identity_schema is not None else None
+        ),
     )
 
 
@@ -194,9 +210,23 @@ def _handle_apply_result(
     resource_schema: Any,
     planned_state_cty: Any,
     response: pb.ApplyResourceChange.Response,
+    *,
+    identity_schema: PvsSchema | None = None,
+    identity_values: dict[str, Any] | None = None,
 ) -> None:
     if new_state_attrs is not None:
         raw_new_state = attrs_to_dict_for_cty(new_state_attrs)
+
+        # Force write-only attributes to None (null in state)
+        write_only_attrs = {
+            name
+            for name, attr in getattr(resource_schema.block, "attributes", {}).items()
+            if getattr(attr, "write_only", False)
+        }
+        for attr_name in write_only_attrs:
+            if attr_name in raw_new_state:
+                raw_new_state[attr_name] = None
+
         validator_type = resource_schema.block.to_cty_type()
         new_state_cty = validator_type.validate(raw_new_state)
 
@@ -222,6 +252,9 @@ def _handle_apply_result(
 
         marshalled_new_state = marshal(new_state_cty, schema=resource_schema.block)
         response.new_state.msgpack = marshalled_new_state.msgpack
+
+        if identity_schema is not None and identity_values is not None:
+            response.new_identity.CopyFrom(marshal_identity(identity_values, identity_schema))
     else:
         response.new_state.msgpack = b"\xc0"
 
@@ -269,6 +302,8 @@ async def _apply_resource_change_impl(
 
         private_state_instance = await _process_private_state(resource_class, request.planned_private)
 
+        identity_schema = resolve_identity_schema(resource_class)
+
         resource_context = _create_resource_context(
             config_cty,
             prior_state_cty,
@@ -276,6 +311,8 @@ async def _apply_resource_change_impl(
             private_state_instance,
             resource_class,
             provider_instance,
+            identity_schema=identity_schema,
+            planned_identity=request.planned_identity,
         )
 
         logger.debug(
@@ -301,6 +338,14 @@ async def _apply_resource_change_impl(
             resource_schema,
             planned_state_cty,
             response,
+            identity_schema=identity_schema,
+            identity_values=(
+                derive_identity_values(
+                    resource_class, new_state_attrs, request.type_name, "apply_resource_change"
+                )
+                if identity_schema is not None and new_state_attrs is not None
+                else None
+            ),
         )
 
     except (CtyValidationError, PyviderError) as e:

@@ -10,8 +10,8 @@ import msgpack  # type: ignore[import-untyped]
 from provide.foundation import logger
 
 from pyvider.common.encryption import decrypt
-from pyvider.conversion import marshal, unmarshal
-from pyvider.exceptions import PyviderError, ResourceError
+from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_identity
+from pyvider.exceptions import Deferral, PyviderError, ResourceError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import (
@@ -19,9 +19,12 @@ from pyvider.protocols.tfprotov6.handlers.utils import (
     check_test_only_access,
     create_diagnostic_from_exception,
     cty_to_attrs_instance,
+    derive_identity_values,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
+from pyvider.schema import PvsSchema
 
 
 @rpc_handler("ReadResource")
@@ -30,7 +33,22 @@ async def ReadResourceHandler(request: pb.ReadResource.Request, context: Any) ->
     return await _read_resource_impl(request, context)
 
 
-async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) -> pb.ReadResource.Response:
+def _set_new_identity(
+    response: pb.ReadResource.Response,
+    resource_class: Any,
+    identity_schema: PvsSchema | None,
+    new_state_attrs: Any,
+    resource_type: str,
+) -> None:
+    """Attach derived identity to the response, only when fully determinable."""
+    if identity_schema is None:
+        return
+    identity_values = derive_identity_values(resource_class, new_state_attrs, resource_type, "read_resource")
+    if identity_values is not None:
+        response.new_identity.CopyFrom(marshal_identity(identity_values, identity_schema))
+
+
+async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) -> pb.ReadResource.Response:  # noqa: C901
     """Implementation of ReadResource handler."""
     response = pb.ReadResource.Response()
     resource_context: Any = None
@@ -92,6 +110,7 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
         )
 
         resource_schema = resource_class.get_schema()
+        identity_schema = resolve_identity_schema(resource_class)
         prior_state_cty = unmarshal(request.current_state, schema=resource_schema.block)
         prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
 
@@ -158,15 +177,32 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
             private_state=private_state_instance,
             capabilities=provider_instance.metadata.capabilities,  # type: ignore[arg-type]
             test_mode_enabled=test_mode_enabled,
+            identity=(
+                unmarshal_identity(request.current_identity, identity_schema)
+                if identity_schema is not None
+                else None
+            ),
         )
         new_state_attrs = await resource_handler.read(resource_context)
 
         if new_state_attrs is not None:
             raw_state_dict = attrs_to_dict_for_cty(new_state_attrs)
+
+            # Force write-only attributes to None (null in state)
+            write_only_attrs = {
+                name
+                for name, attr in getattr(resource_schema.block, "attributes", {}).items()
+                if getattr(attr, "write_only", False)
+            }
+            for attr_name in write_only_attrs:
+                if attr_name in raw_state_dict:
+                    raw_state_dict[attr_name] = None
+
             validator_type = resource_schema.block.to_cty_type()
             new_state_cty = validator_type.validate(raw_state_dict)
             marshalled_new_state = marshal(new_state_cty, schema=resource_schema.block)
             response.new_state.msgpack = marshalled_new_state.msgpack
+            _set_new_identity(response, resource_class, identity_schema, new_state_attrs, request.type_name)
 
             logger.info(
                 "Resource read completed successfully with new state",
@@ -185,6 +221,22 @@ async def _read_resource_impl(request: pb.ReadResource.Request, context: Any) ->
 
         response.private = request.private
 
+    except Deferral as e:
+        logger.info(
+            "Response deferred",
+            operation="read_resource",
+            resource_type=request.type_name,
+            reason=e.reason.name,
+        )
+        if not getattr(request.client_capabilities, "deferral_allowed", False):
+            diag = pb.Diagnostic(
+                severity=pb.Diagnostic.ERROR,
+                summary="Invalid Deferral",
+                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request.",
+            )
+            response.diagnostics.append(diag)
+        else:
+            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)  # type: ignore[assignment]
     except PyviderError as e:
         logger.error(
             "ReadResource failed with framework error",

@@ -100,6 +100,92 @@ def _apply_schema_marks_iterative(root_value: CtyValue, root_schema: PvsType | C
     return results.get(id(root_value), root_value)
 
 
+_SEQUENCE_PAYLOADS = (list, tuple, set, frozenset)
+_CONTAINER_PAYLOADS = (dict, *_SEQUENCE_PAYLOADS)
+
+
+def _children_to_unmark(node: Any) -> list[Any]:
+    """The nested values `node` holds, or an empty list if it holds none.
+
+    Raw Python containers are walked as well as CtyValues. `validate` is
+    routinely handed a plain list or dict whose elements are already-validated
+    values, and those elements can be marked -- an earlier version stopped at
+    the first non-CtyValue and left their marks in place.
+    """
+    payload = node.value if isinstance(node, CtyValue) else node
+    if isinstance(payload, dict):
+        return list(payload.values())
+    if isinstance(payload, _SEQUENCE_PAYLOADS):
+        return list(payload)
+    if isinstance(payload, CtyValue):
+        return [payload]
+    return []
+
+
+def _rebuild_unmarked(node: Any, done: dict[int, Any]) -> Any:
+    """Reassemble `node` from its already-unmarked children."""
+    payload = node.value if isinstance(node, CtyValue) else node
+
+    if isinstance(payload, dict):
+        rebuilt: Any = {k: done.get(id(v), v) for k, v in payload.items()}
+    elif isinstance(payload, _SEQUENCE_PAYLOADS):
+        rebuilt = type(payload)(done.get(id(v), v) for v in payload)
+    elif isinstance(payload, CtyValue):
+        rebuilt = done.get(id(payload), payload)
+    else:
+        rebuilt = payload
+
+    if not isinstance(node, CtyValue):
+        return rebuilt
+    if rebuilt is payload:
+        return attrs.evolve(node, marks=frozenset()) if node.marks else node
+    return attrs.evolve(node, value=rebuilt, marks=frozenset())
+
+
+def _unmark_deep(value: Any) -> Any:
+    """A copy of `value` with every mark removed, at any depth.
+
+    Iterative, like `_apply_schema_marks_iterative` and for the same reason: a
+    deeply nested state value must not blow the Python stack on its way to the
+    wire. An earlier version of this said it was iterative while being plainly
+    recursive, and did raise RecursionError at a nesting depth pyvider-cty
+    advertises as supported, once a realistic handler stack was underneath it.
+
+    Deliberately local rather than `pyvider.cty.marks.unmark_deep`, which only
+    exists from pyvider-cty 0.5. Keeping it here means this module behaves the
+    same against 0.4 and 0.5, so the two repositories can be released in either
+    order.
+    """
+    post_process = object()
+    done: dict[int, Any] = {}
+    processing: set[int] = set()
+    stack: list[Any] = [value]
+
+    while stack:
+        node = stack.pop()
+
+        if node is post_process:
+            original = stack.pop()
+            processing.discard(id(original))
+            done[id(original)] = _rebuild_unmarked(original, done)
+            continue
+
+        node_id = id(node)
+        if node_id in done or node_id in processing:
+            continue
+
+        children = _children_to_unmark(node)
+        if not children:
+            done[node_id] = _rebuild_unmarked(node, done)
+            continue
+
+        processing.add(node_id)
+        stack.extend([node, post_process])
+        stack.extend(children)
+
+    return done.get(id(value), value)
+
+
 def marshal(value: CtyValue | Any, *, schema: PvsType | CtyType) -> pb.DynamicValue:
     """
     Marshals a Python or CtyValue into a protobuf DynamicValue.
@@ -115,9 +201,27 @@ def marshal(value: CtyValue | Any, *, schema: PvsType | CtyType) -> pb.DynamicVa
         raw_value = attrs.asdict(value) if attrs.has(type(value)) else value
         validated_value = schema_cty_type.validate(raw_value)
 
-    final_cty_value = _apply_schema_marks_iterative(validated_value, schema)
-
-    msgpack_data = cty_to_msgpack(final_cty_value, schema_cty_type)
+    # Deliberately not marked on the way out. Marks have no wire
+    # representation -- tfplugin6.DynamicValue carries only msgpack and json --
+    # so applying schema marks here only to serialize immediately afterwards
+    # discarded them again. Sensitivity reaches Terraform through the schema
+    # instead (Schema.Attribute.sensitive), which is why nothing was lost.
+    #
+    # pyvider-cty now refuses to serialize a marked value rather than dropping
+    # the marks silently, matching go-cty, so marking here would fail every
+    # sensitive attribute at apply time.
+    #
+    # The inbound direction still marks: see the plan and apply handlers, where
+    # `_apply_schema_marks_iterative` is how a resource learns an attribute is
+    # sensitive at all, marks having not survived the wire.
+    #
+    # Which is exactly why the value is unmarked here rather than merely left
+    # alone. Resource code is handed a marked config and may legitimately build
+    # its planned or new state out of it, so marked values do reach this
+    # function -- and reaching cty's refusal would crash the provider at plan or
+    # apply. This is the wire boundary and the one place that may drop marks:
+    # sensitivity travels to Terraform in the schema, not the value.
+    msgpack_data = cty_to_msgpack(_unmark_deep(validated_value), schema_cty_type)
     return pb.DynamicValue(msgpack=msgpack_data)
 
 

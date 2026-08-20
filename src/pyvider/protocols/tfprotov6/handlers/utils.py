@@ -12,6 +12,7 @@ import attrs
 from provide.foundation import logger
 from provide.foundation.errors import FoundationError
 
+from pyvider.conversion.marshaler import _unmark_deep
 from pyvider.cty import CtyList, CtyObject, CtyTuple, CtyValue
 from pyvider.cty.exceptions import (
     CtyAttributeValidationError,
@@ -37,9 +38,80 @@ from pyvider.exceptions import (
 from pyvider.hub import hub
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.base import BaseResource
+from pyvider.schema import PvsSchema
 
 # Regex to parse attribute paths like `attr`, `attr[0]`, `attr["key"]`
 PATH_STEP_REGEX = re.compile(r"(\.?)(\w+)|\[(\d+)\]|\[['\"]([^'\"]+)['\"]\]")
+
+
+def derive_identity_values(
+    resource_class: Any,
+    state_attrs: Any,
+    resource_type: str,
+    operation: str,
+) -> dict[str, Any] | None:
+    """Derive identity from a state that is fully known, or None with a warning.
+
+    Read, apply and import all reach this with a state that exists: a destroy is
+    excluded before the call, and a read or import that found nothing has already
+    returned. So both failure modes are genuine defects rather than "not yet
+    knowable":
+
+    - A raised exception almost certainly indicates a bug in this resource's
+      `get_identity()` override -- there is no missing-state excuse left here.
+    - An ordinary None return means the identity schema's attribute names did not
+      resolve against the state object -- a schema/state mismatch.
+
+    Neither is surfaced as a Terraform diagnostic. The operation itself
+    succeeded, and failing it over an identity-derivation bug would misreport a
+    live resource as unreadable or a successful create as a failure. Both are
+    logged at WARNING so they are visible in provider logs rather than
+    disappearing.
+
+    `plan_resource_change` keeps its own version deliberately: during plan the
+    state may legitimately not be known yet, so a None there is an ordinary
+    answer rather than a defect, and it must not warn.
+    """
+    try:
+        identity_values: dict[str, Any] | None = resource_class.get_identity(state_attrs)
+    except Exception as e:
+        logger.warning(
+            f"Omitting new identity: derivation raised an exception after a successful {operation}, "
+            "which likely indicates a bug in this resource's get_identity() override",
+            operation=operation,
+            resource_type=resource_type,
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        return None
+
+    if identity_values is None:
+        logger.warning(
+            "Omitting new identity: get_identity() returned None even though the new state "
+            "is fully known, which likely means the identity schema's attributes do not "
+            "resolve against this resource's state object",
+            operation=operation,
+            resource_type=resource_type,
+        )
+
+    return identity_values
+
+
+def resolve_identity_schema(resource_class: Any) -> PvsSchema | None:
+    """Return a resource's identity schema, or None if it declares none.
+
+    Registration does not require BaseResource: @register_resource only stamps
+    marker attributes, and discovery registers on the marker alone. A duck-typed
+    resource that predates identity therefore has no get_identity_schema() at
+    all, and calling it unguarded would turn a previously working resource into
+    an AttributeError. A missing method means the same thing as a method
+    returning None -- this resource has no identity.
+    """
+    getter = getattr(resource_class, "get_identity_schema", None)
+    if getter is None:
+        return None
+    schema: PvsSchema | None = getter()
+    return schema
 
 
 def get_all_components(component_type: str) -> dict[str, Any]:
@@ -52,6 +124,33 @@ def get_all_components(component_type: str) -> dict[str, Any]:
     return hub.get_components(component_type)
 
 
+def is_test_mode_enabled() -> bool:
+    """Resolve whether test-only components are currently accessible.
+
+    The provider context is authoritative once ConfigureProvider has run, but it
+    does not exist before that. PYVIDER_TESTMODE is the fallback, and for schema
+    generation it is the *only* available signal: Terraform requests the provider
+    schema before it configures the provider, and that schema is computed once per
+    process. Without this fallback a test-only component can never reach the
+    schema, so `pyvider_testmode` in the provider block cannot reveal one either.
+    """
+    try:
+        provider_context = hub.get_component("singleton", "provider_context")
+        test_mode_enabled = bool(getattr(provider_context, "test_mode_enabled", False))
+    except (KeyError, AttributeError):
+        # No provider_context yet (pre-ConfigureProvider, or a unit test).
+        test_mode_enabled = False
+
+    if not test_mode_enabled:
+        from provide.foundation.config import get_env, parse_bool_extended
+
+        env_val = get_env("PYVIDER_TESTMODE", default=None)
+        if env_val:
+            test_mode_enabled = bool(parse_bool_extended(env_val))
+
+    return test_mode_enabled
+
+
 def get_filtered_components(component_type: str) -> dict[str, Any]:
     """
     Retrieves components of a given type, filtering out test-only components
@@ -61,13 +160,7 @@ def get_filtered_components(component_type: str) -> dict[str, Any]:
     """
     all_components = hub.get_components(component_type)
 
-    # Try to get provider context to check test mode, but don't fail if it doesn't exist
-    try:
-        provider_context = hub.get_component("singleton", "provider_context")
-        test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
-    except (KeyError, AttributeError):
-        # If provider_context doesn't exist (e.g., in unit tests), assume not in test mode
-        test_mode_enabled = False
+    test_mode_enabled = is_test_mode_enabled()
 
     if test_mode_enabled:
         logger.info(
@@ -118,22 +211,9 @@ def check_test_only_access(
     if not is_test_only:
         return  # Not test-only, access always allowed
 
-    # Get test mode status from provider context or environment variable.
-    # The env var is checked as a fallback when provider isn't configured yet
-    # (e.g., functions evaluated before ConfigureProvider RPC) or when the
-    # provider config didn't enable test mode but the env var does.
-    try:
-        provider_context = hub.get_component("singleton", "provider_context")
-        test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
-    except (KeyError, AttributeError):
-        test_mode_enabled = False
-
-    if not test_mode_enabled:
-        from provide.foundation.config import get_env, parse_bool_extended
-
-        env_val = get_env("PYVIDER_TESTMODE", default=None)
-        if env_val:
-            test_mode_enabled = parse_bool_extended(env_val)
+    # Test mode comes from the provider context once configured, and from the
+    # environment before that (e.g. functions evaluated before ConfigureProvider).
+    test_mode_enabled = is_test_mode_enabled()
 
     if test_mode_enabled:
         # Info-level — test-only component access is an auditable event
@@ -330,16 +410,44 @@ def is_valid_refinement(plan: CtyValue, result: CtyValue) -> tuple[bool, str]:
     if plan.is_unknown:
         return True, ""
 
-    if plan.value != result.value:
+    # Compared unmarked. Marks are metadata about a value, not part of it, and
+    # the inbound path deliberately marks config from the schema -- so a
+    # resource that echoes a sensitive attribute into its state hands back a
+    # value that is equal in every respect except its marks. CtyValue.__eq__
+    # counts marks, so comparing directly reports a contract violation for a
+    # state that is in fact identical, and fails the apply.
+    if _unmark_deep(plan.value) != _unmark_deep(result.value):
+        # The values themselves are deliberately NOT in this message. It becomes
+        # a tfplugin6.Diagnostic, which Terraform prints to the console and
+        # writes to logs, and that channel has no redaction. A refinement
+        # mismatch on a sensitive attribute would otherwise disclose the secret
+        # in plaintext -- and any mismatch would disclose whatever the value is.
         return (
             False,
-            f"Value mismatch: planned value was '{plan.value}', result was '{result.value}'.",
+            f"Value mismatch: the result differs from the planned value (type {plan.type}). "
+            "Values are omitted here because this message is returned to Terraform.",
         )
 
     return True, ""
 
 
 def str_path_to_proto_path(path_str: str | None) -> pb.AttributePath | None:
+    """Parse a hand-authored path string like `attr[0]["key"]` into proto steps.
+
+    This is the string-literal counterpart to `cty_path_to_proto_path` and is
+    meant for path strings a caller types out directly (e.g.
+    `ctx.add_attribute_error("tags[0]", ...)`), not for `str(cty_path)` /
+    `CtyPath.string()` output. That distinction matters for sets: `KeyStep`'s
+    `__str__` renders a set element's *value* (e.g. `[3]` or `['a']`) once it
+    no longer has the CtyValue to tell "this is a set element" apart from a
+    genuine int/string key -- the regex below has no way to recover that once
+    it is text, and would silently emit a plausible-but-wrong
+    element_key_int/element_key_string step, same as the bug this module's
+    `cty_path_to_proto_path` had. There is no fix at this layer because the
+    information is already gone by the time a string reaches here; a `CtyPath`
+    that might contain a set-element step should go through
+    `cty_path_to_proto_path` directly instead of being stringified first.
+    """
     if not path_str:
         return None
 
@@ -369,7 +477,29 @@ def cty_path_to_proto_path(cty_path: CtyPath | None) -> pb.AttributePath | None:
             case IndexStep(index=index):
                 proto_steps.append(pb.AttributePath.Step(element_key_int=index))
             case KeyStep(key=key):
+                if isinstance(key, CtyValue):
+                    # A set element keys itself (see KeyStep's docstring in
+                    # pyvider-cty and walk.py's `_child_steps`) -- `key` here is
+                    # a whole CtyValue, not a string or int. tfplugin6's
+                    # AttributePath.Step is a oneof of attribute_name /
+                    # element_key_string / element_key_int, documented as
+                    # addressing "an element in an *indexable* collection type" --
+                    # a set isn't one, so there is no honest string or int for
+                    # this step. `str(key)` would render the CtyValue's attrs
+                    # repr (e.g. "CtyValue(vtype=CtyString(), value='a', ...)"),
+                    # a fabricated address that sends Terraform looking for a key
+                    # that was never there. required.py's block-nesting check hits
+                    # the same wall and resolves it the same way: stop at the set
+                    # and report it, since that is the last position a consumer
+                    # can actually navigate to.
+                    break
                 proto_steps.append(pb.AttributePath.Step(element_key_string=str(key)))
+    # A path that is nothing but a set-element step (or starts with one)
+    # truncates to zero proto steps above. Keep the same "nothing more
+    # specific to point at" contract as an empty CtyPath rather than emit
+    # an AttributePath with an empty steps list.
+    if not proto_steps:
+        return None
     return pb.AttributePath(steps=proto_steps)
 
 
@@ -461,7 +591,9 @@ async def create_diagnostic_from_exception(exc: Exception) -> pb.Diagnostic:
     )
 
 
-def cty_to_attrs_instance(cty_val: CtyValue | None, attrs_cls: type[Any] | None) -> Any | None:
+def cty_to_attrs_instance(
+    cty_val: CtyValue | None, attrs_cls: type[Any] | None, *, allow_unknown: bool = False
+) -> Any | None:
     """Convert a CtyValue into an instance of the given attrs-based class.
 
     The framework converts Terraform configuration/state shapes into
@@ -471,8 +603,17 @@ def cty_to_attrs_instance(cty_val: CtyValue | None, attrs_cls: type[Any] | None)
     produce empty or malformed values — so we reject them up front with
     a clear FrameworkConfigurationError, not a confusing failure later
     in the conversion layer.
+
+    By default a value that is not wholly known converts to None, so that a
+    provider's custom validator is never handed a half-known object (issue #5).
+    That is a *validation* policy, and it is wrong anywhere None already means
+    something else. Pass ``allow_unknown=True`` there: ``from_cty`` handles
+    unknowns per attribute, yielding an instance whose not-yet-known fields are
+    None rather than collapsing the whole object.
     """
     if attrs_cls is None:
+        return None
+    if not allow_unknown and cty_val is not None and not cty_val.is_wholly_known():
         return None
     if not inspect.isclass(attrs_cls):
         raise TypeError("Internal validation error: Passed object must be a class.")

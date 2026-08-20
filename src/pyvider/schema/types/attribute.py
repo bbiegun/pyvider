@@ -24,6 +24,7 @@ class PvsAttribute:
     optional: bool = field(default=False)
     computed: bool = field(default=False)
     sensitive: bool = field(default=False)
+    write_only: bool = field(default=False)
     deprecated: bool = field(default=False)
     default: Any = field(default=None)
     description_kind: StringKind = field(default=StringKind.PLAIN)  # Use Enum member

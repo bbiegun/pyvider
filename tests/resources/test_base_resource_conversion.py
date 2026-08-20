@@ -234,10 +234,10 @@ class TestCtyToDictPreservingUnknown:
         caplog.set_level(logging.DEBUG)
 
         cty_type = CtyObject({"name": CtyString(), "value": CtyNumber()})
-        cty_value = cty_type.validate({"name": "test", "value": 42})
-
-        # Make value unknown
-        cty_value.value["value"] = CtyValue.unknown(CtyNumber())
+        # Built with the unknown in place rather than poked in afterwards. A
+        # CtyValue's payload is immutable: mutating it used to work and quietly
+        # invalidated the deep-mark memo cached against that value.
+        cty_value = cty_type.validate({"name": "test", "value": CtyValue.unknown(CtyNumber())})
 
         result = SampleResource._cty_to_dict_preserving_unknown(cty_value)
 
@@ -297,8 +297,9 @@ class TestCtyToDictPreservingUnknown:
         cty_type = CtyObject({"name": CtyString()})
         cty_value = cty_type.validate({"name": "test"})
 
-        # Manually insert non-CtyValue
-        cty_value.value["extra"] = "direct_value"
+        # A payload holding a raw, non-CtyValue member. Built by evolving the
+        # value rather than mutating its payload, which is immutable.
+        cty_value = attrs.evolve(cty_value, value={**cty_value.value, "extra": "direct_value"})
 
         result = SampleResource._cty_to_dict_preserving_unknown(cty_value)
 

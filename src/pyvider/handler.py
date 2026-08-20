@@ -5,15 +5,25 @@
 
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+import time
 from typing import Any
 
 from attrs import define, field
 from provide.foundation import logger
 
+from pyvider.observability import handler_duration, handler_errors, handler_requests
+from pyvider.protocols.tfprotov6.handlers.action_handlers import stream_invoke_action
+from pyvider.protocols.tfprotov6.handlers.list_resource import stream_list_resource
+from pyvider.protocols.tfprotov6.handlers.state_store_handlers import (
+    read_state_bytes,
+    state_store_chunk_size,
+    write_state_bytes,
+)
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.protocols.tfprotov6.protobuf import ProviderServicer
 from pyvider.providers.base import BaseProvider
+from pyvider.state_stores import StateStoreError
 
 
 @define
@@ -35,22 +45,34 @@ class ProviderHandler(ProviderServicer):
             CallFunctionHandler,
             CloseEphemeralResourceHandler,
             ConfigureProviderHandler,
+            ConfigureStateStoreHandler,
+            DeleteStateHandler,
+            GenerateResourceConfigHandler,
             GetFunctionsHandler,
             GetMetadataHandler,
             GetProviderSchemaHandler,
+            GetResourceIdentitySchemasHandler,
+            GetStatesHandler,
             ImportResourceStateHandler,
+            LockStateHandler,
             MoveResourceStateHandler,
             OpenEphemeralResourceHandler,
+            PlanActionHandler,
             PlanResourceChangeHandler,
             ReadDataSourceHandler,
             ReadResourceHandler,
             RenewEphemeralResourceHandler,
             StopProviderHandler,
+            UnlockStateHandler,
+            UpgradeResourceIdentityHandler,
             UpgradeResourceStateHandler,
+            ValidateActionConfigHandler,
             ValidateDataResourceConfigHandler,
             ValidateEphemeralResourceConfigHandler,
+            ValidateListResourceConfigHandler,
             ValidateProviderConfigHandler,
             ValidateResourceConfigHandler,
+            ValidateStateStoreConfigHandler,
         )
 
         # Map handler functions to RPC methods
@@ -59,6 +81,7 @@ class ProviderHandler(ProviderServicer):
             "StartStream": self.StartStream,
             "GetMetadata": GetMetadataHandler,
             "GetProviderSchema": GetProviderSchemaHandler,
+            "GetResourceIdentitySchemas": GetResourceIdentitySchemasHandler,
             "ConfigureProvider": ConfigureProviderHandler,
             "ValidateProviderConfig": ValidateProviderConfigHandler,
             "StopProvider": StopProviderHandler,
@@ -68,15 +91,26 @@ class ProviderHandler(ProviderServicer):
             "ApplyResourceChange": ApplyResourceChangeHandler,
             "ImportResourceState": ImportResourceStateHandler,
             "UpgradeResourceState": UpgradeResourceStateHandler,
+            "UpgradeResourceIdentity": UpgradeResourceIdentityHandler,
             "MoveResourceState": MoveResourceStateHandler,
             "ValidateDataResourceConfig": ValidateDataResourceConfigHandler,
             "ReadDataSource": ReadDataSourceHandler,
+            "GenerateResourceConfig": GenerateResourceConfigHandler,
+            "ValidateListResourceConfig": ValidateListResourceConfigHandler,
             "ValidateEphemeralResourceConfig": ValidateEphemeralResourceConfigHandler,
             "OpenEphemeralResource": OpenEphemeralResourceHandler,
             "RenewEphemeralResource": RenewEphemeralResourceHandler,
             "CloseEphemeralResource": CloseEphemeralResourceHandler,
+            "ValidateActionConfig": ValidateActionConfigHandler,
+            "PlanAction": PlanActionHandler,
             "GetFunctions": GetFunctionsHandler,
             "CallFunction": CallFunctionHandler,
+            "ValidateStateStoreConfig": ValidateStateStoreConfigHandler,
+            "ConfigureStateStore": ConfigureStateStoreHandler,
+            "LockState": LockStateHandler,
+            "UnlockState": UnlockStateHandler,
+            "GetStates": GetStatesHandler,
+            "DeleteState": DeleteStateHandler,
         }
 
     async def _ensure_provider_ready(self) -> BaseProvider:
@@ -182,6 +216,9 @@ class ProviderHandler(ProviderServicer):
     async def GetProviderSchema(self, request: Any, context: Any) -> Any:
         return await self._delegate("GetProviderSchema", request, context)
 
+    async def GetResourceIdentitySchemas(self, request: Any, context: Any) -> Any:
+        return await self._delegate("GetResourceIdentitySchemas", request, context)
+
     async def ConfigureProvider(self, request: Any, context: Any) -> Any:
         return await self._delegate("ConfigureProvider", request, context)
 
@@ -209,6 +246,9 @@ class ProviderHandler(ProviderServicer):
     async def UpgradeResourceState(self, request: Any, context: Any) -> Any:
         return await self._delegate("UpgradeResourceState", request, context)
 
+    async def UpgradeResourceIdentity(self, request: Any, context: Any) -> Any:
+        return await self._delegate("UpgradeResourceIdentity", request, context)
+
     async def MoveResourceState(self, request: Any, context: Any) -> Any:
         return await self._delegate("MoveResourceState", request, context)
 
@@ -235,6 +275,206 @@ class ProviderHandler(ProviderServicer):
 
     async def CallFunction(self, request: Any, context: Any) -> Any:
         return await self._delegate("CallFunction", request, context)
+
+    async def GenerateResourceConfig(self, request: Any, context: Any) -> Any:
+        return await self._delegate("GenerateResourceConfig", request, context)
+
+    async def ValidateListResourceConfig(self, request: Any, context: Any) -> Any:
+        return await self._delegate("ValidateListResourceConfig", request, context)
+
+    async def ValidateActionConfig(self, request: Any, context: Any) -> Any:
+        return await self._delegate("ValidateActionConfig", request, context)
+
+    async def PlanAction(self, request: Any, context: Any) -> Any:
+        return await self._delegate("PlanAction", request, context)
+
+    async def ValidateStateStoreConfig(self, request: Any, context: Any) -> Any:
+        return await self._delegate("ValidateStateStoreConfig", request, context)
+
+    async def ConfigureStateStore(self, request: Any, context: Any) -> Any:
+        return await self._delegate("ConfigureStateStore", request, context)
+
+    async def LockState(self, request: Any, context: Any) -> Any:
+        return await self._delegate("LockState", request, context)
+
+    async def UnlockState(self, request: Any, context: Any) -> Any:
+        return await self._delegate("UnlockState", request, context)
+
+    async def GetStates(self, request: Any, context: Any) -> Any:
+        return await self._delegate("GetStates", request, context)
+
+    async def DeleteState(self, request: Any, context: Any) -> Any:
+        return await self._delegate("DeleteState", request, context)
+
+    async def ListResource(self, request: Any, context: Any) -> AsyncGenerator[pb.ListResource.Event, None]:
+        start = time.perf_counter()
+        handler_requests.inc(handler="ListResource")
+        try:
+            logger.debug(
+                "ListResource RPC received",
+                operation="list_resource",
+                request_type=request.type_name,
+                include_resource_object=request.include_resource_object,
+                limit=request.limit,
+            )
+            async for event in stream_list_resource(request, context):
+                yield event
+        except Exception:
+            handler_errors.inc(handler="ListResource")
+            raise
+        finally:
+            handler_duration.observe(time.perf_counter() - start, handler="ListResource")
+
+    async def ReadStateBytes(
+        self, request: Any, context: Any
+    ) -> AsyncGenerator[pb.ReadStateBytes.Response, None]:
+        start = time.perf_counter()
+        handler_requests.inc(handler="ReadStateBytes")
+        try:
+            try:
+                state_bytes = await read_state_bytes(request.type_name, request.state_id) or b""
+            except StateStoreError as exc:
+                logger.error(
+                    "ReadStateBytes failed to load state",
+                    operation="read_state_bytes",
+                    state_store_type=request.type_name,
+                    state_id=request.state_id,
+                    error_message=str(exc),
+                )
+                yield pb.ReadStateBytes.Response(
+                    total_length=0,
+                    diagnostics=[
+                        pb.Diagnostic(
+                            severity=pb.Diagnostic.ERROR,
+                            summary="ReadStateBytes could not load state",
+                            detail=str(exc),
+                        )
+                    ],
+                )
+                return
+            chunk_size = max(1, state_store_chunk_size(request.type_name))
+
+            logger.debug(
+                "ReadStateBytes RPC received",
+                operation="read_state_bytes",
+                state_store_type=request.type_name,
+                state_id=request.state_id,
+                state_size=len(state_bytes),
+            )
+
+            if not state_bytes:
+                yield pb.ReadStateBytes.Response(total_length=0, diagnostics=[])
+                return
+
+            for start_pos in range(0, len(state_bytes), chunk_size):
+                end_pos = min(start_pos + chunk_size, len(state_bytes))
+                yield pb.ReadStateBytes.Response(
+                    bytes=state_bytes[start_pos:end_pos],
+                    total_length=len(state_bytes),
+                    range=pb.StateRange(start=start_pos, end=end_pos),
+                    diagnostics=[],
+                )
+        except Exception:
+            handler_errors.inc(handler="ReadStateBytes")
+            raise
+        finally:
+            handler_duration.observe(time.perf_counter() - start, handler="ReadStateBytes")
+
+    async def WriteStateBytes(
+        self, request_iterator: AsyncIterator[Any], context: Any
+    ) -> pb.WriteStateBytes.Response:
+        start = time.perf_counter()
+        handler_requests.inc(handler="WriteStateBytes")
+        # Drain the stream to preserve protocol semantics and avoid hanging client-stream calls.
+        try:
+            state_chunks = bytearray()
+            state_store_type = ""
+            state_id = ""
+            expected_total_length = 0
+
+            async for request_chunk in request_iterator:
+                # Presence, not truthiness: an unset submessage is still a
+                # truthy object, and Core sends meta on the first chunk only.
+                # Reading it unconditionally would blank the type name and
+                # state id on every later chunk of a multi-chunk write.
+                if request_chunk.HasField("meta"):
+                    state_store_type = request_chunk.meta.type_name
+                    state_id = request_chunk.meta.state_id
+                if request_chunk.bytes:
+                    state_chunks.extend(request_chunk.bytes)
+                if request_chunk.total_length:
+                    expected_total_length = request_chunk.total_length
+
+            if not state_store_type or not state_id:
+                return pb.WriteStateBytes.Response(
+                    diagnostics=[
+                        pb.Diagnostic(
+                            severity=pb.Diagnostic.ERROR,
+                            summary="WriteStateBytes requires request metadata",
+                            detail="RequestChunk.meta must include type_name and state_id.",
+                        )
+                    ]
+                )
+
+            state = bytes(state_chunks)
+            try:
+                await write_state_bytes(state_store_type, state_id, state)
+            except StateStoreError as exc:
+                logger.error(
+                    "WriteStateBytes failed to persist state",
+                    operation="write_state_bytes",
+                    state_store_type=state_store_type,
+                    state_id=state_id,
+                    error_message=str(exc),
+                )
+                return pb.WriteStateBytes.Response(
+                    diagnostics=[
+                        pb.Diagnostic(
+                            severity=pb.Diagnostic.ERROR,
+                            summary="WriteStateBytes could not persist state",
+                            detail=str(exc),
+                        )
+                    ]
+                )
+
+            diagnostics: list[pb.Diagnostic] = []
+            if expected_total_length and expected_total_length != len(state):
+                diagnostics = [
+                    pb.Diagnostic(
+                        severity=pb.Diagnostic.WARNING,
+                        summary="WriteStateBytes length mismatch",
+                        detail=(
+                            "The declared total_length does not match total bytes received. "
+                            "Provider stored only the received bytes."
+                        ),
+                    )
+                ]
+
+            return pb.WriteStateBytes.Response(
+                diagnostics=diagnostics,
+            )
+        except Exception:
+            handler_errors.inc(handler="WriteStateBytes")
+            raise
+        finally:
+            handler_duration.observe(time.perf_counter() - start, handler="WriteStateBytes")
+
+    async def InvokeAction(self, request: Any, context: Any) -> AsyncGenerator[pb.InvokeAction.Event, None]:
+        start = time.perf_counter()
+        handler_requests.inc(handler="InvokeAction")
+        try:
+            logger.debug(
+                "InvokeAction RPC received",
+                operation="invoke_action",
+                action_type=request.action_type,
+            )
+            async for event in stream_invoke_action(request, context):
+                yield event
+        except Exception:
+            handler_errors.inc(handler="InvokeAction")
+            raise
+        finally:
+            handler_duration.observe(time.perf_counter() - start, handler="InvokeAction")
 
 
 # 🐍🏗️🔚

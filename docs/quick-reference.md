@@ -177,6 +177,9 @@ class MyProvider(BaseProvider):
 | `@register_data_source("name")` | Register a data source |
 | `@register_function(name="name")` | Register a function |
 | `@register_ephemeral_resource("name")` | Register an ephemeral resource |
+| `@register_list_resource("name")` | Register a listable resource |
+| `@register_state_store("name")` | Register a state-store backend |
+| `@register_action("name")` | Register an action |
 | `@register_capability("name")` | Register a capability (experimental) |
 
 ## Common Validators

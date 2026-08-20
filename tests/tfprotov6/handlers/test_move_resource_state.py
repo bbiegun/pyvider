@@ -16,39 +16,37 @@ import pyvider.protocols.tfprotov6.protobuf as pb
 
 
 @pytest.mark.asyncio
-async def test_move_resource_state_returns_empty_response() -> None:
-    """
-    Verifies that MoveResourceState returns a response with warning diagnostic.
-    This handler is currently unimplemented.
-    """
+async def test_move_resource_state_carries_state_private_identity() -> None:
     request = pb.MoveResourceState.Request(
         source_type_name="source_resource",
         target_type_name="target_resource",
+        source_state=pb.RawState(json=b'{"status":"old"}'),
+        source_private=b"private-state",
+        source_identity=pb.RawState(json=b'{"id":"abc"}'),
     )
 
     response = await MoveResourceStateHandler(request, context=None)
 
     assert isinstance(response, pb.MoveResourceState.Response)
-    assert len(response.diagnostics) == 1
-    assert response.diagnostics[0].severity == pb.Diagnostic.WARNING
-    assert "Resource move not yet implemented" in response.diagnostics[0].summary
+    assert len(response.diagnostics) == 0
+    assert response.target_state.json == request.source_state.json
+    assert response.target_private == request.source_private
+    assert response.target_identity.identity_data.json == request.source_identity.json
 
 
 @pytest.mark.asyncio
 async def test_move_resource_state_handles_same_type() -> None:
-    """
-    Verifies that MoveResourceState handles same source and target types.
-    """
+    """Verify same-type moves remain valid no-op operations."""
     request = pb.MoveResourceState.Request(
         source_type_name="test_resource",
         target_type_name="test_resource",
+        source_state=pb.RawState(json=b"{}"),
     )
 
     response = await MoveResourceStateHandler(request, context=None)
 
     assert isinstance(response, pb.MoveResourceState.Response)
-    assert len(response.diagnostics) == 1  # Now returns warning diagnostic
-    assert response.diagnostics[0].severity == pb.Diagnostic.WARNING
+    assert len(response.diagnostics) == 0
 
 
 @pytest.mark.asyncio
@@ -94,6 +92,3 @@ async def test_move_resource_state_records_errors_on_exception() -> None:
 
         # Verify error metric was recorded
         mock_errors.inc.assert_called_once_with(handler="MoveResourceState")
-
-
-# 🐍🏗️🔚

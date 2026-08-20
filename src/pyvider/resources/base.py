@@ -63,6 +63,67 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
     def get_schema(cls) -> PvsSchema: ...
 
     @classmethod
+    def get_identity_schema(cls) -> PvsSchema | None:
+        """Opt in to resource identity.
+
+        Returning None means this resource has no identity, which is the
+        default. Terraform treats identity as optional for managed resources;
+        it is only mandatory for list resources.
+        """
+        return None
+
+    @classmethod
+    def get_identity(cls, state: Any) -> dict[str, Any] | None:
+        """Derive identity values from state by attribute name.
+
+        Identity attributes are almost always a subset of state, so this
+        default means a resource gains identity by declaring
+        get_identity_schema() and nothing else. Override when identity is not
+        derivable from state.
+
+        Returns None when identity cannot be fully determined -- no schema, no
+        state, or any attribute missing, null, or still unknown during plan.
+        """
+        schema = cls.get_identity_schema()
+        if schema is None or state is None:
+            return None
+
+        values: dict[str, Any] = {}
+        for name in schema.block.attributes:
+            value = getattr(state, name, None)
+            if value is None:
+                return None
+            if isinstance(value, CtyValue) and (value.is_unknown or value.is_null):
+                return None
+            values[name] = value
+
+        return values
+
+    async def generate_config(self, state: StateType | CtyValue | None) -> Any:
+        """Turn existing state into a valid configuration for this resource.
+
+        Terraform calls this when generating configuration for a resource it
+        discovered rather than one the practitioner wrote, so the result has to
+        be a value the resource's own config schema accepts -- computed-only
+        attributes dropped, required ones present.
+
+        Returning None means "use the state as it stands", which is both the
+        default and the right answer whenever state is already a valid
+        configuration. The framework then forwards the original wire bytes
+        untouched instead of re-encoding them.
+        """
+        return None
+
+    @classmethod
+    async def upgrade_identity(cls, version: int, raw_identity: dict[str, Any]) -> dict[str, Any]:
+        """Upgrade identity data written under an older identity version.
+
+        Only called when the stored version differs from the schema's current
+        version. The default passes data through unchanged.
+        """
+        return raw_identity
+
+    @classmethod
     def from_cty(cls, cty_value: CtyValue | None, target_cls: type) -> Any | None:
         if cty_value is None:
             return None
@@ -108,18 +169,25 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         `resolve_types` mutates the class, so the cost is paid once per class.
 
         ..note::
-            ``attrs.resolve_types()`` resolves all annotations for a class in one
-            call — if any single annotation references a name unavailable at runtime
-            (e.g. a name only under ``TYPE_CHECKING``), the entire resolution may
-            fail silently, leaving every field wrapped in ``CtyValue``.  This method
-            attempts per-field recovery after a class-level failure.
+            ``attrs.resolve_types()`` resolves a class in ONE call, so it is
+            all-or-nothing: a single annotation naming something unavailable at
+            runtime (typically a name imported only under ``TYPE_CHECKING``) leaves
+            *every* field on the class unresolved, including plain ones like
+            ``list[str]``. There is no per-field recovery -- attrs offers no
+            per-attribute resolution hook, and `Attribute` instances are frozen, so
+            the failure is reported loudly with the names still unresolved rather
+            than papered over.
         """
         try:
             attrs.resolve_types(target_cls)
-        except Exception:
+        except Exception as e:
+            unresolved = [f.name for f in attrs.fields(target_cls) if isinstance(f.type, str)]
             logger.warning(
-                "Could not resolve type annotations for %s",
+                "Could not resolve type annotations; these fields stay wrapped in CtyValue",
                 class_name=getattr(target_cls, "__name__", str(target_cls)),
+                unresolved_fields=unresolved,
+                error_type=type(e).__name__,
+                error_message=str(e),
             )
         return cast(tuple[Any, ...], attrs.fields(target_cls))
 
@@ -303,6 +371,16 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         """Merge config fields into base_plan, skipping nulls and converting known CtyValues."""
         # NOTE: Don't use truthiness check on CtyValue - unknown values are falsy!
         # Use explicit 'is not None' instead
+        # Force write-only attributes to None (null in state)
+        schema = self.get_schema()
+        write_only_attrs = {
+            name
+            for name, attr in getattr(schema.block, "attributes", {}).items()
+            if getattr(attr, "write_only", False)
+        }
+        for attr_name in write_only_attrs:
+            base_plan[attr_name] = None
+
         if (
             ctx.config_cty is not None
             and isinstance(ctx.config_cty, CtyValue)
@@ -311,8 +389,12 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
             cty_value_dict = ctx.config_cty.value
             if isinstance(cty_value_dict, dict):
                 for key, value in cty_value_dict.items():
+                    # Skip write-only attributes entirely from config copy
+                    if key in write_only_attrs:
+                        continue
+
                     # Only add if not already in base_plan (planned_state takes precedence)
-                    if key not in base_plan:
+                    if key not in base_plan or base_plan[key] is None:
                         # Skip null values - they're likely computed fields
                         if isinstance(value, CtyValue) and value.is_null:
                             continue

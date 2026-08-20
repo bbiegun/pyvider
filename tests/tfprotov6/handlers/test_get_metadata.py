@@ -117,6 +117,7 @@ class TestGetMetadataImpl:
             assert response.server_capabilities.plan_destroy is True
             assert response.server_capabilities.get_provider_schema_optional is True
             assert response.server_capabilities.move_resource_state is True
+            assert response.server_capabilities.generate_resource_config is True
 
     @pytest.mark.asyncio
     async def test_impl_handles_empty_registry(

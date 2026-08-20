@@ -294,7 +294,16 @@ class TestIsValidRefinementEdgeCases:
         assert "[1]" in reason
 
     def test_refinement_with_concrete_value_mismatch(self) -> None:
-        """Test refinement fails when concrete values don't match."""
+        """A mismatch is reported, and the values are NOT disclosed.
+
+        This reason becomes a `tfplugin6.Diagnostic`, which Terraform prints to
+        the console and writes to its logs, and that channel has no redaction.
+        Interpolating the values means a refinement mismatch on a sensitive
+        attribute publishes the secret in plaintext -- and a mismatch on any
+        attribute publishes whatever it holds.
+
+        This test previously required both values to appear in the message.
+        """
         plan = CtyValue(vtype=CtyString(), value="original")
         result = CtyValue(vtype=CtyString(), value="modified")
 
@@ -302,8 +311,29 @@ class TestIsValidRefinementEdgeCases:
 
         assert not is_valid
         assert "value mismatch" in reason.lower()
-        assert "original" in reason
-        assert "modified" in reason
+        assert "original" not in reason
+        assert "modified" not in reason
+
+    def test_marks_alone_are_not_a_contract_violation(self) -> None:
+        """A resource echoing a sensitive input back is a valid refinement.
+
+        The inbound path marks config from the schema, so a resource that puts
+        a sensitive attribute into its state returns a value equal to the plan
+        in every respect except its marks. `CtyValue.__eq__` counts marks, so
+        comparing directly failed the apply on exactly the resources that
+        handle secrets.
+        """
+        from pyvider.cty import CtyMap
+        from pyvider.cty.marks import CtyMark
+
+        map_type = CtyMap(element_type=CtyString())
+        plan = map_type.validate({"password": "hunter2"})
+        result = map_type.validate({"password": CtyString().validate("hunter2").mark(CtyMark("sensitive"))})
+
+        is_valid, reason = is_valid_refinement(plan, result)
+
+        assert is_valid, reason
+        assert "hunter2" not in reason
 
 
 class TestCreateDiagnosticEdgeCases:

@@ -9,13 +9,17 @@ from typing import Any
 from provide.foundation import logger
 
 from pyvider.conversion import unmarshal
+from pyvider.cty.exceptions import CtyValidationError
+from pyvider.exceptions import PyviderError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
+from pyvider.protocols.tfprotov6.handlers.utils import create_diagnostic_from_exception
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.protocols.tfprotov6.protobuf import (
     Diagnostic,
 )
 from pyvider.resources.base import BaseResource
+from pyvider.schema.required import check_required_attributes
 
 
 @rpc_handler("ValidateProviderConfig")
@@ -40,25 +44,15 @@ async def _validate_provider_config_impl(
         # Get provider instance and parse config to check test mode
         provider_instance = hub.get_component("singleton", "provider")
         if provider_instance and request.config.msgpack:
+            # Deliberately outside the `except Exception` below that tolerates
+            # a config we can't parse: `.schema` raising means the provider
+            # itself is broken, not that this particular config is
+            # unparsable, and that must fail validation loudly rather than
+            # be swallowed alongside a benign parse failure.
+            provider_schema = provider_instance.schema
+            config_cty = None
             try:
-                provider_schema = provider_instance.schema
                 config_cty = unmarshal(request.config, schema=provider_schema.block)
-
-                if not config_cty.is_unknown:
-                    config_instance = BaseResource.from_cty(config_cty, provider_instance.config_class)  # type: ignore[arg-type]
-                    if config_instance:
-                        test_mode_enabled = getattr(config_instance, "pyvider_testmode", False)
-
-                        if test_mode_enabled:
-                            logger.warning(
-                                "⚠️  Provider test mode ENABLED - test-only components will be accessible",
-                                operation="validate_provider_config",
-                            )
-                        else:
-                            logger.debug(
-                                "Provider test mode NOT enabled - test-only components will be filtered out",
-                                operation="validate_provider_config",
-                            )
             except Exception as e:
                 # Don't fail validation if we can't parse config for logging
                 logger.debug(
@@ -66,6 +60,45 @@ async def _validate_provider_config_impl(
                     operation="validate_provider_config",
                     error=str(e),
                 )
+
+            if config_cty is not None:
+                # cty 0.5 no longer refuses a present-but-null value for a
+                # required attribute (see pyvider.schema.required), so the
+                # schema layer's own check is called explicitly here.
+                # Deliberately outside the swallow-all block above: a
+                # genuinely missing required argument must fail validation,
+                # not just skip the test-mode log line below. It raises
+                # CtyAttributeValidationError, caught below by the
+                # `(CtyValidationError, PyviderError)` clause -- the same
+                # route validate_resource_config.py and
+                # validate_data_resource_config.py use -- so the diagnostic
+                # Terraform receives carries an attribute path, not just a
+                # message string.
+                check_required_attributes(provider_schema.block, config_cty.value)
+
+                try:
+                    if not config_cty.is_unknown:
+                        config_instance = BaseResource.from_cty(config_cty, provider_instance.config_class)  # type: ignore[arg-type]
+                        if config_instance:
+                            test_mode_enabled = getattr(config_instance, "pyvider_testmode", False)
+
+                            if test_mode_enabled:
+                                logger.warning(
+                                    "⚠️  Provider test mode ENABLED - test-only components will be accessible",
+                                    operation="validate_provider_config",
+                                )
+                            else:
+                                logger.debug(
+                                    "Provider test mode NOT enabled - test-only components will be filtered out",
+                                    operation="validate_provider_config",
+                                )
+                except Exception as e:
+                    # Don't fail validation if we can't parse config for logging
+                    logger.debug(
+                        "Could not parse config for test mode check",
+                        operation="validate_provider_config",
+                        error=str(e),
+                    )
 
         # Provider configuration validation is typically minimal
         # Most validation happens in the provider's configure() method
@@ -79,6 +112,23 @@ async def _validate_provider_config_impl(
         )
 
         return response
+
+    except (CtyValidationError, PyviderError) as e:
+        # Same routing as validate_resource_config.py and
+        # validate_data_resource_config.py: create_diagnostic_from_exception
+        # knows how to turn a CtyAttributeValidationError's `.path` into a
+        # populated `Diagnostic.attribute`, so Terraform can point the
+        # practitioner at the offending argument instead of just printing a
+        # message string.
+        logger.error(
+            "ValidateProviderConfig failed with framework error",
+            operation="validate_provider_config",
+            error_type=type(e).__name__,
+            error_message=str(e),
+            exc_info=True,
+        )
+        diag = await create_diagnostic_from_exception(e)
+        return pb.ValidateProviderConfig.Response(diagnostics=[diag])
 
     except Exception as e:
         logger.error(

@@ -15,6 +15,7 @@ from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import create_diagnostic_from_exception, cty_to_attrs_instance
 import pyvider.protocols.tfprotov6.protobuf as pb
+from pyvider.schema.required import check_required_attributes
 
 
 @rpc_handler("ValidateResourceConfig")
@@ -66,6 +67,16 @@ async def _validate_resource_config_impl(
         resource_schema = resource_class.get_schema()
 
         config_cty = unmarshal(request.config, schema=resource_schema.block)
+
+        # cty 0.5 stopped rejecting a null for a non-optional attribute (see
+        # pyvider.schema.required) -- Terraform sends a present null for every
+        # unset argument via ImpliedType(), so this is the only remaining
+        # check that a required argument was actually supplied. Raises
+        # CtyAttributeValidationError, caught below like any other validation
+        # failure. Safe against an unknown/absent top-level config: it walks
+        # off `.value`, which is only ever a real mapping once the config is
+        # a known object.
+        check_required_attributes(resource_schema.block, config_cty.value)
 
         # Try to create typed attrs instance from CTY config
         # If values are unknown/computed, this will return None (expected during planning)

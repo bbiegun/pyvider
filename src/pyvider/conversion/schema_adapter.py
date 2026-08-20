@@ -7,9 +7,10 @@
 from functools import lru_cache
 import json
 
-from pyvider.cty import CtyType
+from pyvider.cty import CtyBool, CtyNumber, CtyString, CtyType
 from pyvider.cty.conversion.type_encoder import encode_cty_type_to_wire_json
 import pyvider.protocols.tfprotov6.protobuf as pb
+from pyvider.schema.exceptions import PvsSchemaDefinitionError
 from pyvider.schema.types import (
     NestingMode,
     PvsAttribute,
@@ -77,6 +78,7 @@ def _pvs_attribute_to_proto(attr: PvsAttribute) -> pb.Schema.Attribute:
         computed=attr.computed,
         sensitive=attr.sensitive,
         deprecated=attr.deprecated,
+        write_only=attr.write_only,
     )
 
 
@@ -96,6 +98,57 @@ def _pvs_nested_block_to_proto(nb: PvsNestedBlock) -> pb.Schema.NestedBlock:
         min_items=nb.min_items or 0,
         max_items=nb.max_items or 0,
     )
+
+
+# Identity is compared by equality and must be "wholly representative of all
+# data necessary to compare two managed resource instances", so only flat
+# scalars are valid.
+_IDENTITY_SCALAR_TYPES = (CtyString, CtyNumber, CtyBool)
+
+
+def pvs_identity_schema_to_proto(schema: PvsSchema) -> pb.ResourceIdentitySchema:
+    """Convert an identity PvsSchema into a protobuf ResourceIdentitySchema.
+
+    Identity reuses PvsSchema, so this is the single place the identity-specific
+    constraints are enforced. `required` maps to `required_for_import` and
+    `optional` to `optional_for_import`, matching the collapse Terraform core
+    performs in ProtoToIdentitySchema.
+    """
+    block = schema.block
+
+    if block.block_types:
+        raise PvsSchemaDefinitionError(
+            "Identity schemas cannot declare nested blocks. Identity must be a flat set of scalar attributes."
+        )
+
+    attributes = []
+    for name, attr in block.attributes.items():
+        if not isinstance(attr.type, _IDENTITY_SCALAR_TYPES):
+            raise PvsSchemaDefinitionError(
+                f"Identity attribute '{name}' has type {type(attr.type).__name__}; "
+                "identity attributes must be scalar (string, number, or bool)."
+            )
+        if attr.computed:
+            raise PvsSchemaDefinitionError(
+                f"Identity attribute '{name}' is marked computed, which is not "
+                "meaningful for identity and would alter the identity object type."
+            )
+        if attr.sensitive:
+            raise PvsSchemaDefinitionError(
+                f"Identity attribute '{name}' is marked sensitive, which is not meaningful for identity."
+            )
+
+        attributes.append(
+            pb.ResourceIdentitySchema.IdentityAttribute(
+                name=name,
+                type=_encode_cty_type_bytes(attr.type),
+                required_for_import=attr.required,
+                optional_for_import=attr.optional,
+                description=attr.description,
+            )
+        )
+
+    return pb.ResourceIdentitySchema(version=schema.version, identity_attributes=attributes)
 
 
 # 🐍🏗️🔚

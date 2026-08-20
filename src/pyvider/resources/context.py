@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import attrs
 from attrs import define, field
@@ -32,6 +32,7 @@ class ResourceContext(BaseContext, Generic[ConfigType, StateType, PrivateStateTy
     planned_state_cty: CtyValue | None = None
     capabilities: dict[str, BaseCapability] = field(factory=dict)
     test_mode_enabled: bool = field(default=False, kw_only=True)
+    identity: dict[str, Any] | None = field(default=None, kw_only=True)
 
     def get_private_state(self, private_state_class: type[PrivateStateType]) -> PrivateStateType | None:
         """

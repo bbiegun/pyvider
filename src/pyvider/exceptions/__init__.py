@@ -16,6 +16,7 @@ from pyvider.exceptions.base import (
     UnsupportedTypeError,
     WireFormatError,
 )
+from pyvider.exceptions.deferral import Deferral
 from pyvider.exceptions.function import (
     FunctionError,
     FunctionRegistrationError,
@@ -28,6 +29,7 @@ from pyvider.exceptions.grpc import (
     RateLimitError,
 )
 from pyvider.exceptions.provider import (
+    ProviderAlreadyConfiguredError,
     ProviderConfigurationError,
     ProviderError,
     ProviderInitializationError,
@@ -69,6 +71,7 @@ __all__ = [
     "ComponentRegistryError",
     "ConversionError",
     "DataSourceError",
+    "Deferral",
     "DeserializationError",
     "FrameworkConfigurationError",
     # Function
@@ -81,6 +84,7 @@ __all__ = [
     "InvalidTypeError",
     "NetworkError",
     "PluginError",
+    "ProviderAlreadyConfiguredError",
     "ProviderConfigurationError",
     # Provider
     "ProviderError",

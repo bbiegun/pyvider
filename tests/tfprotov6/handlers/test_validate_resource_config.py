@@ -215,9 +215,10 @@ class TestValidateResourceConfigImpl:
             from pyvider.cty import CtyString, CtyValue
 
             # Create config with unknown value
-            config_cty = cty_type.validate({"name": "placeholder", "count": 5})
-            # Make name unknown
-            config_cty.value["name"] = CtyValue.unknown(CtyString())
+            # Built with the unknown in place. A CtyValue's payload is
+            # immutable: mutating it used to work and quietly invalidated the
+            # deep-mark memo cached against that value.
+            config_cty = cty_type.validate({"name": CtyValue.unknown(CtyString()), "count": 5})
 
             from pyvider.conversion import marshal
 
@@ -230,10 +231,59 @@ class TestValidateResourceConfigImpl:
 
             response = await _validate_resource_config_impl(request, context=None)
 
-            # Should not crash, may skip custom validation
+            # Should not crash, must skip custom validation for unknown values (Issue #5)
             assert isinstance(response, pb.ValidateResourceConfig.Response)
+            assert len(response.diagnostics) == 0
         finally:
             hub.unregister("resource", "test_resource")
+
+    @pytest.mark.asyncio
+    async def test_impl_issue_5_regression(self, provider_in_hub: Any) -> None:
+        """Test issue 5: Ensure custom validation skips when unknown values are present."""
+
+        class Issue5Resource(BaseResource):
+            config_class = SampleConfig
+
+            @classmethod
+            def get_schema(cls) -> s_resource:
+                return s_resource(
+                    attributes={
+                        "name": a_str(required=True),
+                        "count": a_num(optional=True),
+                    }
+                )
+
+            async def _validate_config(self, config: SampleConfig) -> list[str]:
+                # If unknown values were incorrectly converted to None, this would fail:
+                return ["`name` must not be empty."] if not config.name else []
+
+            async def read(self, ctx: Any) -> Any:
+                return ctx.state
+
+            async def _delete_apply(self, ctx: Any) -> None:
+                pass
+
+        hub.register("resource", "issue5_resource", Issue5Resource)
+
+        try:
+            schema = Issue5Resource.get_schema()
+            cty_type = schema.block.to_cty_type()
+            from pyvider.conversion import marshal
+            from pyvider.cty import CtyString, CtyValue
+
+            config_cty = cty_type.validate({"name": CtyValue.unknown(CtyString()), "count": 5})
+            config_dv = marshal(config_cty, schema=schema.block)
+            request = pb.ValidateResourceConfig.Request(
+                type_name="issue5_resource",
+                config=config_dv,
+            )
+            response = await _validate_resource_config_impl(request, context=None)
+
+            # The validation should be completely skipped, producing 0 diagnostics.
+            # If issue 5 happens, this would have a validation error "`name` must not be empty."
+            assert len(response.diagnostics) == 0
+        finally:
+            hub.unregister("resource", "issue5_resource")
 
     @pytest.mark.asyncio
     async def test_impl_creates_diagnostic_from_exception(self) -> None:
@@ -267,6 +317,42 @@ class TestValidateResourceConfigEdgeCases:
 
             # Empty config should fail schema validation (missing required 'name')
             assert isinstance(response, pb.ValidateResourceConfig.Response)
+        finally:
+            hub.unregister("resource", "test_resource")
+
+    @pytest.mark.asyncio
+    async def test_handler_rejects_present_null_required_attribute(self, provider_in_hub: Any) -> None:
+        """A present-but-null required attribute must be rejected, not silently accepted.
+
+        Terraform marshals every unset argument as a present null via
+        ImpliedType(), not an absent key, so this is the common case in
+        practice -- not an edge case. cty 0.5's CtyObject.validate no longer
+        refuses this on its own (see pyvider.schema.required); the schema
+        layer's own check has to be wired into the handler. The wire bytes
+        below are `{"name": null}` (map with one key "name" -> msgpack nil)
+        built directly rather than through `marshal`/`validate`, since
+        constructing it the "normal" way requires the exact call that used to
+        reject it. SampleValidateResource's schema declares only `name` as
+        required -- `id` is computed and `count` is optional, so both may be
+        legitimately absent from the map without tripping cty's separate
+        "missing required attribute" check for an absent key.
+        """
+        hub.register("resource", "test_resource", SampleValidateResource)
+
+        try:
+            request = pb.ValidateResourceConfig.Request(
+                type_name="test_resource",
+                config=pb.DynamicValue(msgpack=b"\x81\xa4name\xc0"),
+            )
+
+            response = await ValidateResourceConfigHandler(request, context=None)
+
+            assert len(response.diagnostics) > 0
+            assert any("null" in str(d.summary).lower() for d in response.diagnostics)
+            assert any(
+                d.attribute.steps and d.attribute.steps[0].attribute_name == "name"
+                for d in response.diagnostics
+            )
         finally:
             hub.unregister("resource", "test_resource")
 

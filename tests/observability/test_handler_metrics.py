@@ -20,6 +20,15 @@ from pyvider.providers.base import BaseProvider, ProviderMetadata
 from pyvider.schema import s_provider
 
 
+async def _chunk_stream() -> AsyncIterator[pb.WriteStateBytes.RequestChunk]:
+    yield pb.WriteStateBytes.RequestChunk(
+        meta=pb.RequestChunkMeta(type_name="s3", state_id="state-id"),
+        bytes=b"abc",
+        total_length=3,
+        range=pb.StateRange(start=0, end=3),
+    )
+
+
 @pytest.fixture
 async def mock_provider_in_hub() -> AsyncIterator[None]:
     """Register a minimal provider in the hub for handler tests."""
@@ -76,6 +85,76 @@ class TestHandlerMetricsInstrumentation:
         response = await GetFunctionsHandler(request, context=None)
 
         assert response is not None
+        assert handler_requests.value > initial_requests
+        assert handler_duration.count > initial_duration_count
+
+    @pytest.mark.asyncio
+    async def test_list_resource_metrics(self, mock_provider_in_hub: Any) -> None:
+        """Test ProviderHandler.ListResource collects metrics."""
+        from pyvider.handler import ProviderHandler
+
+        initial_requests = handler_requests.value
+        initial_duration_count = handler_duration.count
+
+        handler = ProviderHandler()
+        request = pb.ListResource.Request(type_name="does_not_exist")
+
+        async for _ in handler.ListResource(request, context=None):
+            pass
+
+        assert handler_requests.value > initial_requests
+        assert handler_duration.count > initial_duration_count
+
+    @pytest.mark.asyncio
+    async def test_read_state_bytes_metrics(self, mock_provider_in_hub: Any) -> None:
+        """Test ProviderHandler.ReadStateBytes collects metrics."""
+        from pyvider.handler import ProviderHandler
+
+        initial_requests = handler_requests.value
+        initial_duration_count = handler_duration.count
+
+        handler = ProviderHandler()
+        request = pb.ReadStateBytes.Request(type_name="s3", state_id="state-id")
+
+        async for _ in handler.ReadStateBytes(request, context=None):
+            pass
+
+        assert handler_requests.value > initial_requests
+        assert handler_duration.count > initial_duration_count
+
+    @pytest.mark.asyncio
+    async def test_write_state_bytes_metrics(self, mock_provider_in_hub: Any) -> None:
+        """Test ProviderHandler.WriteStateBytes collects metrics."""
+        from pyvider.handler import ProviderHandler
+
+        initial_requests = handler_requests.value
+        initial_duration_count = handler_duration.count
+
+        handler = ProviderHandler()
+        response = await handler.WriteStateBytes(
+            _chunk_stream(),
+            context=None,
+        )
+
+        assert response is not None
+        assert len(response.diagnostics) == 0
+        assert handler_requests.value > initial_requests
+        assert handler_duration.count > initial_duration_count
+
+    @pytest.mark.asyncio
+    async def test_invoke_action_metrics(self, mock_provider_in_hub: Any) -> None:
+        """Test ProviderHandler.InvokeAction collects metrics."""
+        from pyvider.handler import ProviderHandler
+
+        initial_requests = handler_requests.value
+        initial_duration_count = handler_duration.count
+
+        handler = ProviderHandler()
+        request = pb.InvokeAction.Request(action_type="do_something")
+
+        async for _ in handler.InvokeAction(request, context=None):
+            pass
+
         assert handler_requests.value > initial_requests
         assert handler_duration.count > initial_duration_count
 

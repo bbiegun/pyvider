@@ -232,15 +232,19 @@ class TestWarningLogging:
             assert call_kwargs["import_id"] == "test-id"
 
     @pytest.mark.asyncio
-    async def test_move_resource_state_logs_warning(self) -> None:
-        """Test that move_resource_state logs warning for unimplemented feature."""
+    async def test_move_resource_state_logs_entry(self) -> None:
+        """Test that move_resource_state logs structured entry/context."""
         request = pb.MoveResourceState.Request(source_type_name="source", target_type_name="target")
 
         with patch("pyvider.protocols.tfprotov6.handlers.move_resource_state.logger") as mock_logger:
             await _move_resource_state_impl(request, context=None)
 
-            assert mock_logger.warning.called
-            call_kwargs = mock_logger.warning.call_args[1]
+            assert mock_logger.debug.called
+            call_kwargs = mock_logger.info.call_args[1]
+            assert "operation" in call_kwargs
+            assert call_kwargs["operation"] == "move_resource_state"
+            assert mock_logger.info.called
+
             assert "operation" in call_kwargs
             assert call_kwargs["operation"] == "move_resource_state"
 

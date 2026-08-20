@@ -59,6 +59,20 @@ class _NotImportable:
         return s_resource({"id": a_str(computed=True), "name": a_str(required=True)})
 
 
+@define
+class _Secret:
+    token: str
+
+
+class _ImportableWithPrivate(_Importable):
+    """A resource that carries private state across the import boundary."""
+
+    private_state_class = _Secret
+
+    async def import_state(self, ctx, import_id: str):
+        return _ImportableState(id=f"things/{import_id}", name=import_id), _Secret(token="s3cr3t")
+
+
 @pytest.fixture
 def registered(request):
     """Register a resource class in the hub for the duration of one test."""
@@ -85,6 +99,44 @@ async def test_import_returns_the_object(registered) -> None:
     # Empty msgpack would import a resource that shows every attribute as a change
     # on the next plan.
     assert response.imported_resources[0].state.msgpack
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registered", [_ImportableWithPrivate], indirect=True)
+async def test_import_carries_private_state(registered, encryption_key_env) -> None:
+    """Private state returned by import_state reaches Terraform.
+
+    Terraform passes ImportedResource.private straight back as the next
+    ReadResource call's Private, and read_resource.py only builds a private state
+    instance when those bytes are non-empty. Returning nothing here means a
+    resource's first post-import refresh cannot tell "no private state" from
+    "private state was dropped in transit".
+    """
+    request = pb.ImportResourceState.Request(type_name="test_resource", id="widget")
+
+    response = await ImportResourceStateHandler(request, context=None)
+
+    assert not [d for d in response.diagnostics if d.severity == pb.Diagnostic.ERROR]
+    private = response.imported_resources[0].private
+    assert private, "private state returned by import_state was dropped"
+
+    # It must round-trip the way read_resource.py will read it back.
+    import msgpack
+
+    from pyvider.common.encryption import decrypt
+
+    assert msgpack.unpackb(decrypt(private), raw=False) == {"token": "s3cr3t"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registered", [_Importable], indirect=True)
+async def test_import_without_private_state_stays_empty(registered) -> None:
+    """The single-return form is still valid and must not invent private bytes."""
+    request = pb.ImportResourceState.Request(type_name="test_resource", id="widget")
+
+    response = await ImportResourceStateHandler(request, context=None)
+
+    assert response.imported_resources[0].private == b""
 
 
 @pytest.mark.asyncio

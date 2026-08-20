@@ -35,7 +35,13 @@ class TestComputeSchemaOnce:
                 "pyvider.protocols.tfprotov6.handlers.get_provider_schema._collect_function_schemas"
             ) as mock_functions,
         ):
-            mock_get_component.return_value = mock_provider_instance
+
+            def side_effect(*args, **kwargs):
+                if args[1] == "provider":
+                    return mock_provider_instance
+                return None
+
+            mock_get_component.side_effect = side_effect
             mock_to_proto.return_value = pb.Schema()
             mock_resources.return_value = {}
             mock_data_sources.return_value = {}
@@ -45,6 +51,10 @@ class TestComputeSchemaOnce:
 
             assert isinstance(response, pb.GetProviderSchema.Response)
             assert isinstance(response.provider, pb.Schema)
+            assert response.server_capabilities.plan_destroy is True
+            assert response.server_capabilities.get_provider_schema_optional is True
+            assert response.server_capabilities.move_resource_state is True
+            assert response.server_capabilities.generate_resource_config is True
 
     @pytest.mark.asyncio
     async def test_handles_missing_provider(self) -> None:

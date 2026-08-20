@@ -9,7 +9,7 @@ from typing import Any
 from provide.foundation import logger
 
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
-from pyvider.protocols.tfprotov6.handlers.utils import get_all_components
+from pyvider.protocols.tfprotov6.handlers.utils import get_filtered_components
 import pyvider.protocols.tfprotov6.protobuf as pb
 
 
@@ -28,8 +28,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
     )
 
     try:
-        # Dynamically discover registered resources (all, including test-only)
-        all_resources = get_all_components("resource")
+        # Discover production-usable resources, filtering test-only components when needed.
+        all_resources = get_filtered_components("resource")
         resources = []
         for resource_name in all_resources:
             resources.append(pb.GetMetadata.ResourceMetadata(type_name=resource_name))
@@ -40,8 +40,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=resource_name,
             )
 
-        # Get data sources (all, including test-only)
-        all_data_sources = get_all_components("data_source")
+        # Data sources should respect the same production/test-mode filter behavior.
+        all_data_sources = get_filtered_components("data_source")
         data_sources = []
         for ds_name in all_data_sources:
             data_sources.append(pb.GetMetadata.DataSourceMetadata(type_name=ds_name))
@@ -52,8 +52,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=ds_name,
             )
 
-        # Get functions (all, including test-only)
-        all_functions = get_all_components("function")
+        # Functions should respect the same production/test-mode filter behavior.
+        all_functions = get_filtered_components("function")
         functions = []
         for func_name in all_functions:
             functions.append(pb.GetMetadata.FunctionMetadata(name=func_name))
@@ -64,8 +64,8 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=func_name,
             )
 
-        # Get ephemeral resources (all, including test-only)
-        all_ephemerals = get_all_components("ephemeral_resource")
+        # Ephemerals should respect production/test-mode filtering.
+        all_ephemerals = get_filtered_components("ephemeral_resource")
         ephemeral_resources = []
         for name in all_ephemerals:
             ephemeral_resources.append(pb.GetMetadata.EphemeralMetadata(type_name=name))
@@ -76,6 +76,44 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 component_name=name,
             )
 
+        # State stores registered via @register_state_store back the pluggable
+        # remote-state RPCs; Terraform needs them advertised to route those calls.
+        all_state_stores = get_filtered_components("state_store")
+        state_stores = []
+        for name in all_state_stores:
+            state_stores.append(pb.GetMetadata.StateStoreMetadata(type_name=name))
+            logger.debug(
+                "State store discovered during metadata collection",
+                operation="get_metadata",
+                component_type="state_store",
+                component_name=name,
+            )
+
+        # List resources registered via @register_list_resource answer the
+        # ListResource RPC; Terraform only calls it for advertised type names.
+        all_list_resources = get_filtered_components("list_resource")
+        list_resources = []
+        for name in all_list_resources:
+            list_resources.append(pb.GetMetadata.ListResourceMetadata(type_name=name))
+            logger.debug(
+                "List resource discovered during metadata collection",
+                operation="get_metadata",
+                component_type="list_resource",
+                component_name=name,
+            )
+
+        # Actions registered via @register_action back the action RPCs.
+        all_actions = get_filtered_components("action")
+        actions = []
+        for name in all_actions:
+            actions.append(pb.GetMetadata.ActionMetadata(type_name=name))
+            logger.debug(
+                "Action discovered during metadata collection",
+                operation="get_metadata",
+                component_type="action",
+                component_name=name,
+            )
+
         logger.info(
             "GetMetadata completed successfully",
             operation="get_metadata",
@@ -83,6 +121,9 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
             data_source_count=len(data_sources),
             function_count=len(functions),
             ephemeral_resource_count=len(ephemeral_resources),
+            state_store_count=len(state_stores),
+            list_resource_count=len(list_resources),
+            action_count=len(actions),
         )
 
         response = pb.GetMetadata.Response(
@@ -90,11 +131,15 @@ async def _get_metadata_impl(request: pb.GetMetadata.Request, context: Any) -> p
                 plan_destroy=True,
                 get_provider_schema_optional=True,
                 move_resource_state=True,
+                generate_resource_config=True,
             ),
             resources=resources,
             data_sources=data_sources,
             functions=functions,
             ephemeral_resources=ephemeral_resources,
+            list_resources=list_resources,
+            state_stores=state_stores,
+            actions=actions,
             diagnostics=[],
         )
 

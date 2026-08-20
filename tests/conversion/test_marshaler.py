@@ -8,8 +8,15 @@
 import attrs
 import pytest
 
-from pyvider.conversion.marshaler import marshal, marshal_value, unmarshal, unmarshal_value
-from pyvider.cty import CtyNumber, CtyObject, CtyString, CtyValue
+from pyvider.conversion.marshaler import (
+    _apply_schema_marks_iterative,
+    marshal,
+    marshal_value,
+    unmarshal,
+    unmarshal_value,
+)
+from pyvider.cty import CtyList, CtyNumber, CtyObject, CtyString, CtyValue
+from pyvider.cty.marks import CtyMark
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.schema.types import PvsAttribute, PvsObjectType
 
@@ -203,3 +210,60 @@ class TestRoundTrip:
 
 
 # 🐍🏗️🔚
+
+
+class TestMarshalUnmarksAtTheWireBoundary:
+    """A marked value must reach the wire, not an exception.
+
+    The inbound path deliberately marks config so a resource can see which
+    attributes are sensitive. That means resource code is handed marked values
+    and may build its planned or new state out of them, so marked values arrive
+    here in normal operation.
+
+    pyvider-cty (0.5+) refuses to serialize a marked value rather than dropping
+    the marks silently, matching go-cty. Without unmarking here that refusal
+    would surface as a provider crash at plan or apply, on precisely the
+    resources that handle secrets.
+
+    Marks are safe to drop at this one point because sensitivity reaches
+    Terraform through the schema -- Schema.Attribute.sensitive -- and never
+    through the value.
+    """
+
+    def _schema_and_value(self):
+        schema = PvsObjectType(attributes={"password": PvsAttribute(type=CtyString(), sensitive=True)})
+        cty_type = CtyObject(attribute_types={"password": CtyString()})
+        return schema, cty_type.validate({"password": "secret"})
+
+    def test_a_value_marked_by_the_inbound_path_still_marshals(self) -> None:
+        schema, value = self._schema_and_value()
+        marked = _apply_schema_marks_iterative(value, schema)
+
+        result = marshal(marked, schema=schema)
+
+        assert isinstance(result, pb.DynamicValue)
+        assert result.msgpack
+
+    def test_a_top_level_marked_value_still_marshals(self) -> None:
+        schema, value = self._schema_and_value()
+
+        result = marshal(value.mark(CtyMark("sensitive")), schema=schema)
+
+        assert isinstance(result, pb.DynamicValue)
+
+    def test_the_marshalled_bytes_match_the_unmarked_value(self) -> None:
+        """Unmarking must not disturb what goes on the wire."""
+        schema, value = self._schema_and_value()
+        marked = _apply_schema_marks_iterative(value, schema)
+
+        assert marshal(marked, schema=schema).msgpack == marshal(value, schema=schema).msgpack
+
+    def test_unmarking_reaches_nested_values(self) -> None:
+        schema = PvsObjectType(
+            attributes={"creds": PvsAttribute(type=CtyList(element_type=CtyString()), sensitive=True)}
+        )
+        cty_type = CtyObject(attribute_types={"creds": CtyList(element_type=CtyString())})
+        value = cty_type.validate({"creds": ["a", "b"]})
+        marked = _apply_schema_marks_iterative(value, schema)
+
+        assert isinstance(marshal(marked, schema=schema), pb.DynamicValue)

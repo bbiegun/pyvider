@@ -24,6 +24,7 @@ from pyvider.schema.factory import (
     b_single,
     s_data_source,
     s_function,
+    s_identity,
     s_provider,
     s_resource,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "b_single",
     "s_data_source",
     "s_function",
+    "s_identity",
     "s_provider",
     "s_resource",
 ]

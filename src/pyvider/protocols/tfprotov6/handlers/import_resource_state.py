@@ -6,16 +6,22 @@
 
 from typing import Any
 
+import attrs
+import msgpack  # type: ignore[import-untyped]
 from provide.foundation import logger
 
+from pyvider.common.encryption import encrypt
 from pyvider.conversion import marshal
-from pyvider.exceptions import ResourceError
+from pyvider.conversion.identity import marshal_identity, unmarshal_identity
+from pyvider.exceptions import Deferral, ResourceError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import (
     attrs_to_dict_for_cty,
     check_test_only_access,
     create_diagnostic_from_exception,
+    derive_identity_values,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
@@ -34,13 +40,23 @@ async def _import_resource_state_impl(
 ) -> pb.ImportResourceState.Response:
     """Adopt an object that already exists into Terraform state.
 
-    A resource participates by implementing `import_state(ctx, id) -> state | None`;
-    the framework marshals whatever it returns through the resource schema.
+    A resource participates by implementing `import_state(ctx, id) -> state | None`,
+    or `-> (state, private_state) | None` when it keeps private state; the framework
+    marshals whatever it returns through the resource schema.
 
     `read()` is deliberately not used as a fallback: read is given prior state,
     while import is given an ID STRING and must locate the object from that alone.
     A resource whose identity is more than its id — a workspace plus a name, say —
     can only answer the second question deliberately.
+
+    Identity needs no hook of its own. `ImportResourceState.Request` carries both
+    `id` and `identity`, and Terraform sends whichever the practitioner wrote, so
+    this is one operation with two input forms rather than two operations — a
+    separate `import_by_identity` would let a resource implement one and silently
+    return no identity from the other. So the identity arrives on `ctx.identity`,
+    exactly as it does for read, plan and apply, and the answer is derived from
+    the returned state by the same `get_identity()` those three use. A resource
+    gains all of it by declaring `get_identity_schema()` and nothing else.
     """
     response = pb.ImportResourceState.Response()
 
@@ -66,6 +82,7 @@ async def _import_resource_state_impl(
         check_test_only_access(resource_class, request.type_name, "resource")
 
         resource_schema = resource_class.get_schema()
+        identity_schema = resolve_identity_schema(resource_class)
         resource_handler = resource_class()
         import_state = getattr(resource_handler, "import_state", None)
         if import_state is None:
@@ -99,9 +116,23 @@ async def _import_resource_state_impl(
             state=None,
             capabilities=provider_instance.metadata.capabilities if provider_instance else {},  # type: ignore[arg-type]
             test_mode_enabled=test_mode_enabled,
+            identity=(
+                unmarshal_identity(request.identity, identity_schema) if identity_schema is not None else None
+            ),
         )
 
         imported = await import_state(resource_context, request.id)
+
+        # A resource that keeps private state may return it alongside the state,
+        # the same (state, private_state) shape the plan and apply hooks use.
+        # Terraform hands ImportedResource.private straight back as
+        # ReadResourceRequest.Private, and read_resource.py gates on it being
+        # non-empty -- so without this, the first refresh after an import sees no
+        # private state at all and the resource cannot tell that apart from
+        # never having had any.
+        imported_private = None
+        if isinstance(imported, tuple):
+            imported, imported_private = imported
 
         if imported is None:
             # "Not found" and "cannot import" are different answers; Terraform has a
@@ -127,7 +158,23 @@ async def _import_resource_state_impl(
             type_name=request.type_name,
         )
         imported_resource.state.msgpack = marshalled.msgpack
-        imported_resource.private = b""
+        imported_resource.private = (
+            encrypt(msgpack.packb(attrs.asdict(imported_private), use_bin_type=True))
+            if imported_private is not None
+            else b""
+        )
+
+        # Terraform reads ImportedResource.identity and writes it to state, so a
+        # resource that declares an identity schema and is then imported without
+        # this arrives in state with an empty identity -- and every later plan
+        # sees a change it cannot explain.
+        if identity_schema is not None:
+            identity_values = derive_identity_values(
+                resource_class, imported, request.type_name, "import_resource_state"
+            )
+            if identity_values is not None:
+                imported_resource.identity.CopyFrom(marshal_identity(identity_values, identity_schema))
+
         response.imported_resources.append(imported_resource)
 
         logger.info(
@@ -139,6 +186,23 @@ async def _import_resource_state_impl(
         )
         return response
 
+    except Deferral as e:
+        logger.info(
+            "Response deferred",
+            operation="import_resource_state",
+            resource_type=request.type_name,
+            reason=e.reason.name,
+        )
+        if not getattr(request.client_capabilities, "deferral_allowed", False):
+            diag = pb.Diagnostic(
+                severity=pb.Diagnostic.ERROR,
+                summary="Invalid Deferral",
+                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request.",
+            )
+            response.diagnostics.append(diag)
+        else:
+            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)  # type: ignore[assignment]
+        return response
     except Exception as e:
         logger.error(
             "Resource import failed",

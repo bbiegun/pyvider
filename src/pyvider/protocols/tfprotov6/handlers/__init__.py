@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-
 from pyvider.protocols.tfprotov6.handlers.apply_resource_change import ApplyResourceChangeHandler
 from pyvider.protocols.tfprotov6.handlers.call_function import CallFunctionHandler
 from pyvider.protocols.tfprotov6.handlers.close_ephemeral_resource import CloseEphemeralResourceHandler
@@ -11,7 +10,22 @@ from pyvider.protocols.tfprotov6.handlers.configure_provider import ConfigurePro
 from pyvider.protocols.tfprotov6.handlers.get_functions import GetFunctionsHandler
 from pyvider.protocols.tfprotov6.handlers.get_metadata import GetMetadataHandler
 from pyvider.protocols.tfprotov6.handlers.get_provider_schema import GetProviderSchemaHandler
+from pyvider.protocols.tfprotov6.handlers.get_resource_identity_schemas import (
+    GetResourceIdentitySchemasHandler,
+)
 from pyvider.protocols.tfprotov6.handlers.import_resource_state import ImportResourceStateHandler
+from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import (
+    ConfigureStateStoreHandler,
+    DeleteStateHandler,
+    GenerateResourceConfigHandler,
+    GetStatesHandler,
+    LockStateHandler,
+    PlanActionHandler,
+    UnlockStateHandler,
+    ValidateActionConfigHandler,
+    ValidateListResourceConfigHandler,
+    ValidateStateStoreConfigHandler,
+)
 from pyvider.protocols.tfprotov6.handlers.move_resource_state import MoveResourceStateHandler
 from pyvider.protocols.tfprotov6.handlers.open_ephemeral_resource import OpenEphemeralResourceHandler
 from pyvider.protocols.tfprotov6.handlers.plan_resource_change import PlanResourceChangeHandler
@@ -19,6 +33,9 @@ from pyvider.protocols.tfprotov6.handlers.read_data_source import ReadDataSource
 from pyvider.protocols.tfprotov6.handlers.read_resource import ReadResourceHandler
 from pyvider.protocols.tfprotov6.handlers.renew_ephemeral_resource import RenewEphemeralResourceHandler
 from pyvider.protocols.tfprotov6.handlers.stop_provider import StopProviderHandler
+from pyvider.protocols.tfprotov6.handlers.upgrade_resource_identity import (
+    UpgradeResourceIdentityHandler,
+)
 from pyvider.protocols.tfprotov6.handlers.upgrade_resource_state import UpgradeResourceStateHandler
 from pyvider.protocols.tfprotov6.handlers.validate_data_resource_config import (
     ValidateDataResourceConfigHandler,
@@ -34,22 +51,34 @@ __all__ = [
     "CallFunctionHandler",
     "CloseEphemeralResourceHandler",
     "ConfigureProviderHandler",
+    "ConfigureStateStoreHandler",
+    "DeleteStateHandler",
+    "GenerateResourceConfigHandler",
     "GetFunctionsHandler",
     "GetMetadataHandler",
     "GetProviderSchemaHandler",
+    "GetResourceIdentitySchemasHandler",
+    "GetStatesHandler",
     "ImportResourceStateHandler",
+    "LockStateHandler",
     "MoveResourceStateHandler",
     "OpenEphemeralResourceHandler",
+    "PlanActionHandler",
     "PlanResourceChangeHandler",
     "ReadDataSourceHandler",
     "ReadResourceHandler",
     "RenewEphemeralResourceHandler",
     "StopProviderHandler",
+    "UnlockStateHandler",
+    "UpgradeResourceIdentityHandler",
     "UpgradeResourceStateHandler",
+    "ValidateActionConfigHandler",
     "ValidateDataResourceConfigHandler",
     "ValidateEphemeralResourceConfigHandler",
+    "ValidateListResourceConfigHandler",
     "ValidateProviderConfigHandler",
     "ValidateResourceConfigHandler",
+    "ValidateStateStoreConfigHandler",
 ]
 
 # 🐍🏗️🔚

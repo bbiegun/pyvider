@@ -38,12 +38,18 @@ classifiers = [
 dependencies = [
     "attrs>=25.4.0",
     "click>=8.3.1",
-    "grpcio>=1.76.0",
+    # Floors are set by the committed protobuf stubs, which enforce them at
+    # import: tfplugin6_pb2_grpc.py pins GRPC_GENERATED_VERSION = '1.83.0' and
+    # raises RuntimeError below it, and tfplugin6_pb2.py calls
+    # ValidateProtobufRuntimeVersion(..., 7, 35, 1, ...). Raise these together
+    # with the stubs, never independently.
+    "grpcio>=1.83.0",
+    "protobuf>=7.35.1",
     "msgpack>=1.1.1",
     "google>=3.0.0",
     "cryptography>=45.0.7",
     "provide-foundation>=0.4.0",
-    "pyvider-cty>=0.4.0",
+    "pyvider-cty>=0.5.0",
     "pyvider-rpcplugin>=0.4.0",
 ]
 
@@ -56,6 +62,11 @@ Issues = "https://github.com/provide-io/pyvider/issues"
 [dependency-groups]
 dev = [
     "provide-testkit[pyvider-dev]>=0.4.0",
+    # Floor only. scripts/regen_protobuf.py --check compares stub content with
+    # toolchain version stamps masked, and checks those stamps separately against
+    # the grpcio/protobuf floors declared above, so a newer grpcio-tools no longer
+    # reports the stubs as stale over banner churn.
+    "grpcio-tools>=1.83.0",
 ]
 docs = [
     "provide-testkit[docs]>=0.4.0",
@@ -107,7 +118,15 @@ addopts = "-m 'not memray' --strict-markers --strict-config"
 line-length = 111
 indent-width = 4
 target-version = "py311"
-exclude = ["**/*pb2*.py", "mutants"]
+# ruff >=0.16 formats Python blocks inside Markdown; docs prose is not ours to
+# restyle, so keep .md out of both check and format.
+#
+# `.ci-tooling` is another repository, checked out into the workspace by CI. Its
+# docs are not ours to restyle either, and `ruff format .` -- which is what the
+# wrknv `format.check` task runs, unlike the scoped invocation used locally --
+# walks into it and fails the Code Quality job on files this repository does not
+# own.
+exclude = ["**/*pb2*.py", "**/*pb2*.pyi", "**/*.md", "mutants", ".ci-tooling"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "ANN", "B", "BLE", "C90", "PIE", "PLR", "S", "SIM", "PTH", "RUF"]
@@ -128,6 +147,7 @@ ignore = [
     "PLR0911",  # too-many-return-statements (refactor later)
     "PLR0912",  # too-many-branches (refactor later)
     "PLR0913",  # too-many-arguments (common in config classes)
+    "PLR0917",  # too-many-positional-arguments (same rationale as PLR0913)
     "PLR0915",  # too-many-statements (refactor later)
     "PLR2004",  # magic-value-comparison (too noisy)
 ]
@@ -138,6 +158,7 @@ ignore = [
 # Complex protocol handlers - inherently complex due to Terraform protocol requirements
 "src/pyvider/cli/launch_context_command.py" = ["C901"]
 "src/pyvider/protocols/tfprotov6/handlers/utils.py" = ["C901"]
+"src/pyvider/protocols/tfprotov6/handlers/read_data_source.py" = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pyvider", "tests"]
@@ -186,8 +207,18 @@ module = ["pyvider.protocols.tfprotov6.protobuf.*"]
 ignore_errors = true
 
 [tool.mutmut]
-paths_to_mutate = ["src/pyvider/protocols/tfprotov6/handlers"]
-runner = "pytest tests/tfprotov6/handlers/ -x --tb=short"
+# `paths_to_mutate` was renamed to `source_paths` in mutmut 3.
+# The whole package must be copied, not just the modules under test: mutmut
+# runs the suite inside `mutants/`, and a partial copy leaves imports like
+# `pyvider.hub` unresolvable. Narrow what actually runs with a mutant-name
+# filter instead, e.g. `mutmut run "src.pyvider.state_stores.*"`.
+source_paths = ["src/pyvider"]
+# The runner must cover every source path above, or mutants in the newer
+# packages are reported as survivors purely because nothing exercised them.
+# Scope collection to the suites that exercise the mutated code. Collecting
+# the whole tree pulls in tests/docs/, whose module-level pytest.skip aborts
+# mutmut's stats run.
+tests_dir = ["tests/tfprotov6/handlers", "tests/state_stores", "tests/list_resources", "tests/actions"]
 dict_synonyms = ["dict", "OrderedDict", "defaultdict"]
 use_patch_file = false
 
@@ -243,3 +274,14 @@ allowed_paths = [
     # Config file with examples
     "pyvider.toml",
 ]
+
+# No `[tool.uv.sources]`. Local sibling checkouts are installed with
+# `uv pip install -e ../pyvider-cty` rather than pinned as a path source here,
+# so this file describes only what a published install resolves -- the same
+# thing pyvider-cty and tofusoup say, and for the same reason.
+#
+# It is not only a preference. The release workflow calls ci-tooling's
+# `python-release.yml`, which has no `no-sources` input to pass (checked against
+# v0.4.2, the newest tag), so a path source here fails the release outright:
+# "Failed to generate package metadata for `provide-foundation @ ../provide-foundation`".
+# That is exactly how tofusoup's first v0.5.0 attempt died.

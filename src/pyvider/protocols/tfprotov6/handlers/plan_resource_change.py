@@ -12,20 +12,23 @@ from provide.foundation import logger
 
 from pyvider.common.encryption import decrypt, encrypt
 from pyvider.common.operation_context import OperationContext, operation_context
-from pyvider.conversion import marshal, unmarshal
+from pyvider.conversion import marshal, marshal_identity, unmarshal, unmarshal_identity
 from pyvider.conversion.marshaler import _apply_schema_marks_iterative
 from pyvider.cty import CtyObject, CtyValue
 from pyvider.cty.exceptions import CtyValidationError
-from pyvider.exceptions import PyviderError, ResourceError
+from pyvider.exceptions import Deferral, PyviderError, ResourceError
 from pyvider.hub import hub
 from pyvider.protocols.tfprotov6.handlers._metrics import rpc_handler
 from pyvider.protocols.tfprotov6.handlers.utils import (
     check_test_only_access,
     create_diagnostic_from_exception,
     cty_to_attrs_instance,
+    resolve_identity_schema,
 )
 import pyvider.protocols.tfprotov6.protobuf as pb
 from pyvider.resources.context import ResourceContext
+from pyvider.schema import PvsSchema
+from pyvider.schema.required import check_required_attributes
 
 
 async def _get_resource_and_provider_instances(type_name: str) -> tuple[Any, Any]:
@@ -136,11 +139,24 @@ def _create_resource_context(
     private_state_instance: Any,
     resource_class: Any,
     provider_instance: Any,
+    *,
+    identity_schema: PvsSchema | None = None,
+    prior_identity: pb.ResourceIdentityData | None = None,
 ) -> ResourceContext:
-    # Try to create attrs instances, but they may return None if values are unknown/computed
+    # config and prior state keep the default policy: a config that is not
+    # wholly known collapses to None, so a provider's custom validator is never
+    # handed a half-known object (issue #5).
     config_instance = cty_to_attrs_instance(config_cty_marked, resource_class.config_class)
     prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
-    proposed_new_state_instance = cty_to_attrs_instance(proposed_new_state_cty, resource_class.state_class)
+    # The proposed new state must NOT collapse. `BaseResource.plan` reads "no
+    # config and no planned state" as a delete, so a config carrying an unknown
+    # -- the ordinary `name = other_resource.computed` dependency -- would plan
+    # absence, and Terraform rejects the whole plan with "planned for absence
+    # but config wants existence". `from_cty` handles unknowns per attribute,
+    # yielding an instance whose not-yet-known fields are None.
+    proposed_new_state_instance = cty_to_attrs_instance(
+        proposed_new_state_cty, resource_class.state_class, allow_unknown=True
+    )
 
     provider_context = hub.get_component("singleton", "provider_context")
     test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)
@@ -154,6 +170,9 @@ def _create_resource_context(
         planned_state_cty=proposed_new_state_cty,
         capabilities=provider_instance.metadata.capabilities,
         test_mode_enabled=test_mode_enabled,
+        identity=(
+            unmarshal_identity(prior_identity, identity_schema) if identity_schema is not None else None
+        ),
     )
 
 
@@ -161,6 +180,9 @@ def _handle_planned_state_dict(
     planned_state_dict: dict[str, Any],
     resource_schema: Any,
     response: pb.PlanResourceChange.Response,
+    *,
+    identity_schema: PvsSchema | None = None,
+    identity_values: dict[str, Any] | None = None,
 ) -> None:
     logger.debug("_handle_planned_state_dict received", keys=list(planned_state_dict.keys()))
     logger.debug("Planned state dict values", planned_state_dict=planned_state_dict)
@@ -193,10 +215,71 @@ def _handle_planned_state_dict(
 
     logger.debug("Raw values for validation", keys=list(raw_values_for_validation.keys()))
 
+    # cty 0.5 no longer refuses a present-but-null value for a required
+    # attribute (see pyvider.schema.required). Config nulls are already
+    # rejected earlier, at ValidateResourceConfig -- this catches a different
+    # thing: a bug in *this provider's* plan() implementation that left a
+    # required, non-computed attribute null in the planned state it is about
+    # to hand back to Terraform. Raises, and is caught the same way as every
+    # other planning failure by _plan_resource_change_impl's own exception
+    # handling.
+    check_required_attributes(resource_schema.block, raw_values_for_validation, is_state=True)
+
     # Validate the planned state - unknown values will be preserved by CTY
     planned_state_cty_final = validator_type.validate(raw_values_for_validation)
     marshalled_planned_state = marshal(planned_state_cty_final, schema=resource_schema.block)
     response.planned_state.msgpack = marshalled_planned_state.msgpack
+
+    if identity_schema is not None and identity_values is not None:
+        response.planned_identity.CopyFrom(marshal_identity(identity_values, identity_schema))
+
+
+def _derive_planned_identity_values(
+    resource_class: Any,
+    resource_schema: Any,
+    planned_state_dict: dict[str, Any],
+    resource_type: str,
+) -> dict[str, Any] | None:
+    """Derive identity from the planned state, when fully determinable.
+
+    The common "not yet knowable" case during plan -- an identity attribute
+    that depends on a value still unknown at plan time -- does not raise:
+    validation preserves the unknown, cty_to_attrs_instance yields None for
+    that field, and get_identity()'s own null-check returns None cleanly.
+    What this actually catches is malformed/incomplete planned-state data, or
+    a bug in a resource's custom get_identity() override -- genuine defects,
+    not "not yet". Identity is still omitted rather than surfaced as a
+    Terraform diagnostic here (a partial or unknown-bearing identity would
+    itself make Terraform report the provider as buggy), but the failure is
+    logged at WARNING so it is visible in provider logs instead of silently
+    disappearing.
+    """
+    try:
+        # cty 0.5 no longer refuses a present-but-null value for a required
+        # attribute (see pyvider.schema.required); a null there is exactly
+        # the "malformed/incomplete planned-state data" this function's
+        # broad except already documents catching, so it is checked here
+        # too and left to that same except -- omit identity, warn, move on.
+        check_required_attributes(resource_schema.block, planned_state_dict, is_state=True)
+        identity_values: dict[str, Any] | None = resource_class.get_identity(
+            cty_to_attrs_instance(
+                resource_schema.block.to_cty_type().validate(planned_state_dict),
+                resource_class.state_class,
+            )
+        )
+        return identity_values
+    except Exception as e:
+        logger.warning(
+            "Omitting planned identity: derivation raised an exception. This is not the "
+            "ordinary not-yet-knowable case, which returns None without raising -- it is "
+            "either planned-state data that failed to validate against the resource schema "
+            "or a bug in this resource's get_identity() override",
+            operation="plan_resource_change",
+            resource_type=resource_type,
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        return None
 
 
 @rpc_handler("PlanResourceChange")
@@ -238,6 +321,8 @@ async def _plan_resource_change_impl(
 
         private_state_instance = await _process_private_state(resource_class, request.prior_private)
 
+        identity_schema = resolve_identity_schema(resource_class)
+
         resource_context = _create_resource_context(
             config_cty_marked,
             prior_state_cty,
@@ -245,6 +330,8 @@ async def _plan_resource_change_impl(
             private_state_instance,
             resource_class,
             provider_instance,
+            identity_schema=identity_schema,
+            prior_identity=request.prior_identity,
         )
 
         logger.debug(
@@ -269,7 +356,20 @@ async def _plan_resource_change_impl(
                 return response
 
         if planned_state_dict:
-            _handle_planned_state_dict(planned_state_dict, resource_schema, response)
+            identity_values = (
+                _derive_planned_identity_values(
+                    resource_class, resource_schema, planned_state_dict, request.type_name
+                )
+                if identity_schema is not None
+                else None
+            )
+            _handle_planned_state_dict(
+                planned_state_dict,
+                resource_schema,
+                response,
+                identity_schema=identity_schema,
+                identity_values=identity_values,
+            )
 
         if planned_private_state_attrs:
             serialized_private_bytes = msgpack.packb(
@@ -292,6 +392,22 @@ async def _plan_resource_change_impl(
             has_planned_private=bool(response.planned_private),
         )
 
+    except Deferral as e:
+        logger.info(
+            "Response deferred",
+            operation="plan_resource_change",
+            resource_type=request.type_name,
+            reason=e.reason.name,
+        )
+        if not getattr(request.client_capabilities, "deferral_allowed", False):
+            diag = pb.Diagnostic(
+                severity=pb.Diagnostic.ERROR,
+                summary="Invalid Deferral",
+                detail="The provider raised a Deferral but Terraform did not set deferral_allowed for this request.",
+            )
+            response.diagnostics.append(diag)
+        else:
+            response.deferred.reason = pb.Deferred.Reason.Value(e.reason.name)  # type: ignore[assignment]
     except (CtyValidationError, PyviderError) as e:
         logger.error(
             "PlanResourceChange failed with framework error",

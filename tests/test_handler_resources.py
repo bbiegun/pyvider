@@ -5,10 +5,14 @@
 
 """Tests for ProviderHandler - Resource and data source operations."""
 
+from collections.abc import Callable
+from typing import Any
+
 from provide.testkit.mocking import AsyncMock, MagicMock
 import pytest
 
 from pyvider.handler import ProviderHandler
+import pyvider.protocols.tfprotov6.protobuf as pb
 
 
 @pytest.fixture
@@ -218,6 +222,50 @@ async def test_renew_ephemeral_resource_delegates(mock_provider: MagicMock) -> N
 
     mock_delegate.assert_awaited_once_with("RenewEphemeralResource", request, context)
     assert result == "renew_response"
+
+
+@pytest.mark.parametrize(
+    ("method_name", "request_factory"),
+    [
+        ("GenerateResourceConfig", lambda: pb.GenerateResourceConfig.Request(type_name="demo")),
+        (
+            "ValidateListResourceConfig",
+            lambda: pb.ValidateListResourceConfig.Request(type_name="demo"),
+        ),
+        ("ValidateStateStoreConfig", lambda: pb.ValidateStateStore.Request(type_name="demo")),
+        ("ConfigureStateStore", lambda: pb.ConfigureStateStore.Request(type_name="demo")),
+        ("PlanAction", lambda: pb.PlanAction.Request(action_type="demo_action")),
+        ("ValidateActionConfig", lambda: pb.ValidateActionConfig.Request(type_name="demo_action")),
+        (
+            "LockState",
+            lambda: pb.LockState.Request(type_name="demo_state", state_id="state-id", operation="read"),
+        ),
+        (
+            "UnlockState",
+            lambda: pb.UnlockState.Request(type_name="demo_state", state_id="state-id", lock_id="lock-id"),
+        ),
+        ("GetStates", lambda: pb.GetStates.Request(type_name="demo_state")),
+        ("DeleteState", lambda: pb.DeleteState.Request(type_name="demo_state", state_id="state-id")),
+    ],
+)
+@pytest.mark.asyncio
+async def test_6_11_placeholder_handlers_delegate(
+    method_name: str, request_factory: Callable[[], Any], mock_provider: MagicMock
+) -> None:
+    """Test v6.11 placeholder methods delegate to _delegate."""
+    handler = ProviderHandler(provider=mock_provider)
+
+    mock_delegate = AsyncMock(return_value="placeholder_response")
+    handler._delegate = mock_delegate
+
+    request = request_factory()
+    context = MagicMock()
+
+    method = getattr(handler, method_name)
+    result = await method(request, context)
+
+    mock_delegate.assert_awaited_once_with(method_name, request, context)
+    assert result == "placeholder_response"
 
 
 @pytest.mark.asyncio

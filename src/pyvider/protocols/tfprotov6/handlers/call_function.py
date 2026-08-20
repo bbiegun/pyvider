@@ -4,8 +4,9 @@
 #
 
 
+from collections.abc import Callable
 import inspect
-from typing import Any
+from typing import Any, cast
 
 from provide.foundation import logger
 
@@ -228,8 +229,14 @@ async def _call_function_impl(request: pb.CallFunction.Request, context: Any) ->
                 f"  4. Review provider logs for component registration errors"
             )
 
-        # Instantiate the function class if it's a class
-        function_obj = function_cls(name=func_name) if inspect.isclass(function_cls) else function_cls
+        # Instantiate the function class if it's a class. inspect.isclass narrows to
+        # bare `type`, which drops the constructor signature the hub actually hands
+        # back, so the class branch is cast back to a callable factory.
+        function_obj: Any = (
+            cast("Callable[..., Any]", function_cls)(name=func_name)
+            if inspect.isclass(function_cls)
+            else function_cls
+        )
 
         # Check if this is a test-only component accessed without test mode
         check_test_only_access(function_obj, func_name, "function")

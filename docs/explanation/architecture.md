@@ -115,6 +115,9 @@ class ComponentHub:
     data_sources: dict[str, type[BaseDataSource]]
     functions: dict[str, type[BaseFunction]]
     ephemerals: dict[str, type[BaseEphemeral]]
+    list_resources: dict[str, type[BaseListResource]]
+    state_stores: dict[str, type[BaseStateStore]]
+    actions: dict[str, type[BaseAction]]
 ```
 
 **Responsibilities:**
@@ -141,7 +144,7 @@ class TerraformProviderServicer:
 ```
 
 **Key Features:**
-- Full Protocol v6 implementation
+- Terraform Plugin Protocol v6.11 implementation
 - Async/await support throughout
 - Automatic error handling and diagnostics
 - Request/response logging for debugging
@@ -237,7 +240,18 @@ class PrivateState:
 
 ### Terraform Plugin Protocol v6
 
-Pyvider implements the complete Terraform Plugin Protocol v6 specification:
+Pyvider implements the Terraform Plugin Protocol v6 specification, including the v6.11 state-store,
+list-resource, and action RPCs. Each of those dispatches to a provider-defined component rather than
+returning a generic response, and state is durable by default:
+
+### Client Capabilities
+
+Terraform 1.13+ introduced several capability flags in `ClientCapabilities` that inform the provider of what the CLI supports. Pyvider handles these as follows:
+
+- **`deferral_allowed`**: Honored. When true, providers may raise a `Deferral` exception to defer the request; when false, raising a deferral results in an error diagnostic.
+- **`write_only_attributes_allowed`**: Deliberately ignored. Pyvider unconditionally nullifies `write_only` attributes on outbound state responses. This is the safest default because old Terraform versions that do not support this capability would otherwise store the write-only (secret) value in plain text in the state file.
+- **`store_planned_private`**: Deliberately ignored. Pyvider always emits private state regardless of client support. Unsupported clients will simply drop it, and providers must remain robust to its absence during `ApplyResourceChange`.
+- **`computed_blocks_allowed`**: Deliberately ignored. The provider schema is statically defined upfront and cannot conditionally adapt its structure in `PlanResourceChange` based on a capability flag. Unsupported clients will error during schema validation.
 
 #### Supported RPCs
 
@@ -257,10 +271,137 @@ Pyvider implements the complete Terraform Plugin Protocol v6 specification:
 | `ReadDataSource` | Reads data source | ✅ Full |
 | `GetFunctions` | Returns function definitions | ✅ Full |
 | `CallFunction` | Executes functions | ✅ Full |
+| `GenerateResourceConfig` | Derives a valid config from existing state | ✅ Full — calls `BaseResource.generate_config` |
+| `ValidateListResourceConfig` | Validates a list block | ✅ Full — calls `BaseListResource.validate` |
+| `ValidateEphemeralResourceConfig` | Validates ephemeral config | ✅ Full |
 | `OpenEphemeralResource` | Opens ephemeral resource | ✅ Full |
 | `RenewEphemeralResource` | Renews ephemeral resource | ✅ Full |
 | `CloseEphemeralResource` | Closes ephemeral resource | ✅ Full |
+| `ValidateStateStoreConfig` | Validates state store config | ✅ Full — calls `BaseStateStore.validate` |
+| `ConfigureStateStore` | Configures a state store backend | ✅ Full — calls `BaseStateStore.configure` |
+| `ListResource` | Streams listable resources | ✅ Full — streams `BaseListResource.list` |
+| `ReadStateBytes` | Reads state store payload chunks | ✅ Full — durable backend |
+| `WriteStateBytes` | Writes state store payload chunks | ✅ Full — durable, atomic writes |
+| `LockState` | Acquires a state lock | ✅ Full — cross-process, lease-aware |
+| `UnlockState` | Releases a state lock | ✅ Full — cross-process, lease-aware |
+| `GetStates` | Enumerates provider states | ✅ Full — durable backend |
+| `DeleteState` | Deletes remote state data | ✅ Full — durable backend |
+| `PlanAction` | Plans action execution | ✅ Full — calls `BaseAction.plan` |
+| `InvokeAction` | Invokes actions | ✅ Full — streams `BaseAction.invoke` |
+| `ValidateActionConfig` | Validates action config | ✅ Full — calls `BaseAction.validate` |
 | `StopProvider` | Graceful shutdown | ✅ Full |
+
+An RPC whose type name is not registered returns an error diagnostic naming the type and listing what
+is registered, rather than a silent success.
+
+### v6.11 Extension Points
+
+The v6.11 RPCs are backed by three component types, each registered with a decorator and discovered the
+same way resources are.
+
+#### State stores (`pyvider.state_stores`)
+
+A state store backs Terraform's pluggable remote-state RPCs. `BaseStateStore` defines the contract;
+two backends ship with the framework:
+
+| Backend | Durable | Use |
+|---------|---------|-----|
+| `FileSystemStateStore` | Yes | Production. Payloads are written to a temp file, fsynced, then `os.replace`-d over the target, so a reader sees the whole old value or the whole new one. |
+| `InMemoryStateStore` | No | Unit tests and single-process local development. State lives in the process heap and is lost on restart. |
+
+Locks are leases, not flags. A lock record is read and rewritten inside a POSIX record lock, which makes
+"check whether it is locked, then claim it" a single atomic step across processes; the lease carries an
+absolute expiry, so a provider that dies holding a lock does not wedge the state permanently. A lock
+request that collides with a live lease returns an error diagnostic rather than stealing it.
+
+##### Windows caveats
+
+The filesystem backend runs on Windows, but three POSIX guarantees weaken there. They are listed
+because each one silently degrades rather than failing loudly:
+
+| Guarantee | POSIX | Windows |
+|---|---|---|
+| Mutex released when the holder dies | Kernel-owned record lock, automatic | Sentinel file; reclaimed only after a staleness timeout |
+| State files readable only by their owner | `chmod 0600` enforced | `chmod` toggles the read-only bit only — **it cannot restrict other users** |
+| Directory entry fsynced after rename | `fsync` on the directory fd | Directories cannot be opened as file descriptors; the step is skipped |
+
+`os.replace` also differs: on Windows it fails if another process currently has the target file open,
+so a concurrent reader can make a write fail rather than being served the previous version.
+
+Treat a state directory on a multi-user Windows host as **not** access-controlled by this backend. Use
+filesystem ACLs, or a backend whose storage enforces its own access control.
+
+Backend selection for a store type, in order:
+
+1. a backend registered for that type name with `@register_state_store`
+2. `PYVIDER_STATE_STORE_BACKEND` (`memory` or `filesystem`)
+3. `filesystem` when `PYVIDER_STATE_STORE_PATH` is set — naming a directory is read as intent to persist
+4. `memory`
+
+`PYVIDER_STATE_STORE_LOCK_TTL` overrides the lease duration in seconds.
+
+```python
+from pyvider.state_stores import BaseStateStore, register_state_store
+
+@register_state_store("acme_s3")
+class S3StateStore(BaseStateStore):
+    async def read_state(self, type_name: str, state_id: str) -> bytes | None: ...
+    async def write_state(self, type_name: str, state_id: str, payload: bytes) -> None: ...
+    # ... plus delete_state, list_states, lock_state, unlock_state, get_lock
+```
+
+#### List resources (`pyvider.list_resources`)
+
+A list resource answers `ListResource`: given a filter configuration, stream the resources that exist
+remotely. Results are keyed by resource identity, which is how Terraform ties a listed instance back to
+a managed resource. Setting `resource_type` borrows that resource's identity and state schemas, so the
+common case restates neither.
+
+```python
+from pyvider.list_resources import BaseListResource, ListResult, register_list_resource
+
+@register_list_resource("acme_widget_list", resource_type="acme_widget")
+class WidgetList(BaseListResource):
+    config_class = WidgetListConfig
+
+    @classmethod
+    def get_schema(cls): ...
+
+    async def list(self, ctx):
+        for widget in await fetch(ctx.config):
+            yield ListResult(identity={"id": widget.id}, display_name=widget.name)
+```
+
+Results are forwarded one at a time as they are yielded, and the stream stops at `ctx.limit`, so an
+implementation that yields lazily never does work Terraform will discard.
+
+#### Actions (`pyvider.actions`)
+
+An action is a provider-defined operation Terraform invokes on its own, outside any resource lifecycle.
+It is validated, then planned, then invoked as a stream of progress events.
+
+```python
+from pyvider.actions import ActionPlan, ActionProgress, BaseAction, register_action
+
+@register_action("acme_reboot")
+class Reboot(BaseAction):
+    config_class = RebootConfig
+
+    @classmethod
+    def get_schema(cls): ...
+
+    async def plan(self, ctx) -> ActionPlan:
+        return ActionPlan()
+
+    async def invoke(self, ctx):
+        yield ActionProgress(message="draining")
+        await drain(ctx.config.target)
+        yield ActionProgress(message="rebooting")
+```
+
+`plan()` can return warnings, or defer with a `DeferralReason` when a prerequisite is not yet known — a
+deferral is only forwarded when the client set `deferral_allowed`. Every `InvokeAction` ends with
+exactly one completed event, including on failure, so a failed action cannot leave Terraform waiting.
 
 ### Message Flow
 
