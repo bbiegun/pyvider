@@ -120,7 +120,13 @@ indent-width = 4
 target-version = "py311"
 # ruff >=0.16 formats Python blocks inside Markdown; docs prose is not ours to
 # restyle, so keep .md out of both check and format.
-exclude = ["**/*pb2*.py", "**/*pb2*.pyi", "**/*.md", "mutants"]
+#
+# `.ci-tooling` is another repository, checked out into the workspace by CI. Its
+# docs are not ours to restyle either, and `ruff format .` -- which is what the
+# wrknv `format.check` task runs, unlike the scoped invocation used locally --
+# walks into it and fails the Code Quality job on files this repository does not
+# own.
+exclude = ["**/*pb2*.py", "**/*pb2*.pyi", "**/*.md", "mutants", ".ci-tooling"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "ANN", "B", "BLE", "C90", "PIE", "PLR", "S", "SIM", "PTH", "RUF"]
