@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from pyvider.handler import ProviderHandler
-from pyvider.protocols.tfprotov6.handlers.missing_feature_handlers import reset_state_stores
+from pyvider.protocols.tfprotov6.handlers.config_handlers import reset_state_stores
 import pyvider.protocols.tfprotov6.protobuf as pb
 
 
