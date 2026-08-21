@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-21
+
+### Fixed
+- **A list resource's identity schema is published under its own type name.**
+  `GetResourceIdentitySchemas` iterated managed resources only, so a list
+  resource -- for which identity is mandatory, since it is how Terraform ties a
+  listed instance back to a managed one -- was absent from the map.
+
+## [0.5.1] - 2026-08-21
+
+### Fixed
+- **A provider-defined function is no longer handed a half-known argument.**
+  `call_function` guarded with `is_unknown`, which is top-level only: a list
+  whose *elements* are unknown is itself known, so the guard never fired,
+  `cty_to_native` rendered those elements as `None`, and the function ran on a
+  partially known argument. At plan time
+  `provider::x::join("\n", [resource.a.token, ...])` raised `TypeError` from
+  inside `str.join` and Terraform reported "Invalid function argument" for a
+  configuration that is valid. Both the required and variadic paths now test
+  `is_wholly_known()` and defer the call instead.
+- **`BaseEphemeralResource.validate` is annotated `ConfigType | None`.** The
+  handler passes whatever `cty_to_attrs_instance` returns, which is `None` when
+  the configuration is not wholly known -- an attribute referencing a
+  not-yet-created resource, for instance. Every other component type already
+  declared this; ephemeral resources did not, so an implementation written
+  against the annotation raised `AttributeError` at plan time.
+
+## [0.5.0] - 2026-08-20
+
+### Added
+- **Terraform plugin protocol 6.11.** Ninety-seven commits:
+  - **State stores** -- a provider can serve Terraform's state backend, with
+    locking that survives a crashed process on non-POSIX hosts.
+  - **List resources** and **actions**, the two new 6.11 component types,
+    discovered into a caller's registry.
+  - **Deferred responses** in resource handlers, so a provider can answer "not
+    yet" rather than guessing.
+  - **Resource identity** carried across the import boundary.
+  - **Server and client capability advertisement** in `GetProviderSchema`,
+    including `provider_meta`.
+
+### Fixed
+- `StopProvider` is answered before the server stops.
+- An unknown data source is reported as a diagnostic rather than a crash.
+- The proposed new state may carry unknown values.
+- `WriteStateBytes` accepts a multi-chunk stream.
+- A create is no longer executed as a destroy.
+- A crashed process no longer wedges state on non-POSIX hosts.
+
+### Changed
+- Requires **pyvider-cty >= 0.5.0**, which carries 61 breaking changes. Read its
+  changelog before upgrading: arithmetic width, set ordering on the wire, mark
+  propagation, `regex` argument order, and stricter `csvdecode`/`jsondecode` all
+  moved.
+- `[tool.uv.sources]` is gone from the manifest; sibling checkouts are installed
+  with `uv pip install -e ../<repo>` for local development instead, so the
+  published metadata describes what a real install resolves.
+
+## [0.4.0] - 2026-04-24
+
+Released without a changelog entry at the time; recorded here for continuity.
+See the [GitHub release](https://github.com/provide-io/pyvider/releases/tag/v0.4.0).
+
 ## [0.3.33] - 2026-04-13
 
 ### Fixed
