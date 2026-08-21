@@ -26,6 +26,17 @@ jobs:
       python-version: '3.11'
       use-wrknv: true
       platform-preset: standard  # ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel
+      # pyvider drives subprocesses, sockets and file locking, so Windows is a
+      # platform its behaviour actually differs on -- state_stores/_filelock.py
+      # falls back to an O_EXCL sentinel where there is no fcntl, and
+      # pyvider-rpcplugin switches to TCP transport. Both shipped without a
+      # Windows job to prove them.
+      #
+      # amd64 only. Windows arm64 cannot install the suite at all: grpcio 1.83.0
+      # publishes win32 and win_amd64 wheels only (grpc/grpc#39064) and pyvider
+      # requires grpcio>=1.83.0, so `uv sync` fails there before a test runs.
+      # `include-windows-arm` is the separate opt-in for it, deliberately unset.
+      include-windows: true
       coverage-threshold: 0  # not yet enforced on the wrknv path (test.coverage has no --cov-fail-under)
       run-security: true
       run-secret-scan: true

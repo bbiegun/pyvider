@@ -49,6 +49,13 @@ _FALLBACK_POLL_SECONDS = 0.01
 # live holder only just created.
 _MIN_SENTINEL_STALE_SECONDS = 30.0
 
+# What "somebody else holds the sentinel" looks like from `O_CREAT | O_EXCL`.
+# POSIX raises EEXIST. Windows raises EEXIST too for a plainly existing file,
+# but reports ERROR_ACCESS_DENIED -- PermissionError -- while the file is in
+# the delete-pending state a concurrent release leaves behind, so a contended
+# acquire escaped the retry loop and surfaced as PermissionError to the caller.
+_SENTINEL_HELD = (FileExistsError, PermissionError)
+
 
 class FileMutexTimeoutError(TimeoutError):
     """Raised when the cross-process mutex could not be acquired in time."""
@@ -93,7 +100,7 @@ def _release(handle: IO[bytes], path: Path) -> None:
     if HAVE_FCNTL:
         fcntl.lockf(handle.fileno(), fcntl.LOCK_UN)
     else:
-        _sentinel_path(path).unlink(missing_ok=True)
+        _discard_sentinel(_sentinel_path(path))
 
 
 def _acquire_fcntl(handle: IO[bytes], path: Path, timeout: float) -> None:
@@ -136,6 +143,24 @@ def _sentinel_is_stale(sentinel: Path, timeout: float) -> bool:
     return age > max(timeout, _MIN_SENTINEL_STALE_SECONDS)
 
 
+def _discard_sentinel(sentinel: Path) -> None:
+    """Remove a sentinel, tolerating the races Windows turns into errors.
+
+    Windows refuses to unlink a file another process still holds open, and a
+    peer clearing the same stale sentinel first is ordinary contention rather
+    than a fault. Either way the sentinel is somebody else's to remove, and the
+    staleness check is the backstop if nobody does.
+    """
+    try:
+        sentinel.unlink(missing_ok=True)
+    except PermissionError:  # pragma: no cover - a Windows-only race
+        logger.debug(
+            "A peer still holds the state mutex sentinel; leaving it to them",
+            operation="discard_file_mutex_sentinel",
+            path=str(sentinel),
+        )
+
+
 def _acquire_sentinel(path: Path, timeout: float) -> None:
     sentinel = _sentinel_path(path)
     deadline = time.monotonic() + timeout
@@ -144,14 +169,14 @@ def _acquire_sentinel(path: Path, timeout: float) -> None:
             fd = os.open(sentinel, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(fd)
             return
-        except FileExistsError as exc:
+        except _SENTINEL_HELD as exc:
             if _sentinel_is_stale(sentinel, timeout):
                 logger.warning(
                     "Reclaiming a stale state mutex sentinel",
                     operation="acquire_file_mutex",
                     path=str(path),
                 )
-                sentinel.unlink(missing_ok=True)
+                _discard_sentinel(sentinel)
                 continue
             if time.monotonic() >= deadline:
                 raise FileMutexTimeoutError(

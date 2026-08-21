@@ -46,7 +46,11 @@ def test_detect_launch_context_collects_environment(monkeypatch: pytest.MonkeyPa
     assert context.details == {"reason": "patched"}
     assert context.environment_info["terraform_cookie_present"] is True
     assert "pspf_env_vars" in context.environment_info
-    assert context.working_directory == "/workspace"
+    # `detect_launch_context` reports `str(Path.cwd())`, which spells the path
+    # with the host's own separator -- "/workspace" on POSIX, "\\workspace" on
+    # Windows. Comparing against the literal asserted the POSIX spelling and
+    # failed on Windows for a value that was entirely correct.
+    assert context.working_directory == str(Path("/workspace"))
 
 
 def test_is_pspf_launch_detects_cache_path(monkeypatch: pytest.MonkeyPatch) -> None:

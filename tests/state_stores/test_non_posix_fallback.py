@@ -126,4 +126,94 @@ def test_the_fallback_reports_the_contended_path_on_timeout(without_fcntl: None,
     assert str(lock_path) in str(excinfo.value)
 
 
+class TestWindowsReportsContentionAsPermissionDenied:
+    """`O_CREAT | O_EXCL` does not fail the same way on both kernels.
+
+    POSIX raises EEXIST for a sentinel somebody holds. Windows raises EEXIST
+    too for a plainly existing file, but reports ERROR_ACCESS_DENIED --
+    PermissionError -- while the file sits in the delete-pending state a
+    concurrent release leaves behind. The retry loop caught only
+    FileExistsError, so a contended acquire escaped the mutex entirely:
+
+        _filelock.py, line 144, in _acquire_sentinel
+            fd = os.open(sentinel, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        E   PermissionError: [Errno 13] Permission denied: '...shared.tflock.mutex'
+
+    Found by pyvider's first Windows CI run, in
+    `test_cross_process_locking.py::test_locked_read_modify_write_loses_no_updates`.
+    Simulated here rather than skipped, so the behaviour is pinned on every
+    platform -- the same reason this module forces `HAVE_FCNTL` off.
+    """
+
+    def test_a_permission_error_is_treated_as_contention_and_retried(
+        self, without_fcntl: None, lock_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The first attempt looks like Windows delete-pending; the second wins."""
+        real_open = os.open
+        attempts = []
+
+        def flaky_open(path: object, flags: int, mode: int = 0o777) -> int:
+            # Only the sentinel; the lock file itself is opened through here too.
+            if str(path).endswith(".mutex"):
+                attempts.append(path)
+                if len(attempts) == 1:
+                    raise PermissionError(13, "Permission denied", str(path))
+            return real_open(path, flags, mode)
+
+        monkeypatch.setattr(_filelock.os, "open", flaky_open)
+
+        with exclusive_file_mutex(lock_path, timeout=2.0) as handle:
+            handle.write(b"held")
+
+        assert len(attempts) >= 2, "the PermissionError should have been retried, not raised"
+        assert not _sentinel_path(lock_path).exists(), "the sentinel outlived the block"
+
+    def test_a_permanent_permission_error_still_times_out_rather_than_hanging(
+        self, without_fcntl: None, lock_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Retrying must not become waiting forever.
+
+        A PermissionError that never clears is indistinguishable from a holder
+        that never lets go, so it ends the same way: the timeout, naming the
+        contended path.
+        """
+
+        real_open = os.open
+
+        def always_denied(path: object, flags: int, mode: int = 0o777) -> int:
+            if str(path).endswith(".mutex"):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_open(path, flags, mode)
+
+        monkeypatch.setattr(_filelock.os, "open", always_denied)
+
+        with pytest.raises(FileMutexTimeoutError) as excinfo:
+            with exclusive_file_mutex(lock_path, timeout=0.05):
+                pass  # pragma: no cover - the block must not be entered
+
+        assert str(lock_path) in str(excinfo.value)
+
+    def test_a_release_that_cannot_unlink_does_not_escape_the_block(
+        self, without_fcntl: None, lock_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Windows refuses to unlink a file a peer still holds open.
+
+        Raising out of the `finally` would mask whatever the caller's block was
+        doing, and the sentinel is not lost either way -- the staleness check
+        reclaims it.
+        """
+        real_unlink = Path.unlink
+
+        def denied_unlink(self: Path, missing_ok: bool = False) -> None:
+            if self.name.endswith(".mutex"):
+                raise PermissionError(13, "Permission denied", str(self))
+            real_unlink(self, missing_ok=missing_ok)
+
+        with exclusive_file_mutex(lock_path, timeout=1.0):
+            monkeypatch.setattr(Path, "unlink", denied_unlink)
+
+        # No exception escaped, and the sentinel is left for staleness to clear.
+        assert _sentinel_path(lock_path).exists()
+
+
 # 🐍🏗️🔚
