@@ -36,9 +36,17 @@ class BaseEphemeralResource(ABC, Generic[ResultType, PrivateStateType, ConfigTyp
         """Returns the schema for the resource's configuration and result."""
         ...
 
-    async def validate(self, config: ConfigType) -> list[str]:
+    async def validate(self, config: ConfigType | None) -> list[str]:
         """
         Performs custom validation on the configuration.
+
+        ``config`` is None when the configuration is not wholly known -- an
+        attribute referencing a not-yet-created resource, for instance. That is
+        deliberate: `cty_to_attrs_instance` collapses a half-known object rather
+        than handing over one whose fields are silently None. Every other
+        component type already declares this; ephemeral resources did not, so
+        the annotation promised something the handler does not deliver and an
+        implementation written against it raised AttributeError at plan time.
 
         Returns:
             A list of error messages. An empty list indicates success.

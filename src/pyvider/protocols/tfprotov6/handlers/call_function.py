@@ -48,7 +48,15 @@ def _process_function_arguments(
 
         decoded_cty_val = unmarshal(arg_proto, schema=param_cty_type)
 
-        if decoded_cty_val.is_unknown:
+        # `is_unknown` is top-level only: a *list* whose elements are unknown is
+        # itself known, so this guard used to let it through, `cty_to_native`
+        # rendered those elements as None, and the provider's function received
+        # a half-known argument. `join("\n", [resource.a.token, ...])` at plan
+        # time then raised TypeError from inside str.join and Terraform reported
+        # "Invalid function argument" for a configuration that was perfectly
+        # valid. Same rule as `cty_to_attrs_instance`: a provider is never
+        # handed a partially known object.
+        if not decoded_cty_val.is_wholly_known():
             has_unknown = True
             break
 
@@ -68,7 +76,8 @@ def _process_function_arguments(
         for arg_proto in request_arguments[len(params_meta) :]:
             decoded_cty_val = unmarshal(arg_proto, schema=variadic_cty_type)
 
-            if decoded_cty_val.is_unknown:
+            # Same reasoning as the required parameters above.
+            if not decoded_cty_val.is_wholly_known():
                 has_unknown = True
                 break
 
