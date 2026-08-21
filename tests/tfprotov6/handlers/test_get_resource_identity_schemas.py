@@ -17,6 +17,17 @@ from pyvider.schema import a_str, s_identity
 MODULE = "pyvider.protocols.tfprotov6.handlers.get_resource_identity_schemas"
 
 
+def _only_resources(components: dict) -> object:
+    """Answer `get_filtered_components` per component kind.
+
+    The handler asks for managed resources *and* list resources now, because
+    Terraform looks a list resource's identity up by the list resource's own
+    type name. A mock returning one dict for every kind hands the same component
+    back twice and doubles whatever the test is counting.
+    """
+    return lambda kind: components if kind == "resource" else {}
+
+
 def _resource_with_identity(version: int = 0) -> MagicMock:
     cls = MagicMock()
     cls.get_identity_schema.return_value = s_identity(
@@ -47,7 +58,7 @@ async def test_includes_only_resources_declaring_identity() -> None:
         "demo_without": _resource_without_identity(),
     }
 
-    with patch(f"{MODULE}.get_filtered_components", return_value=components):
+    with patch(f"{MODULE}.get_filtered_components", side_effect=_only_resources(components)):
         response = await GetResourceIdentitySchemasHandler(
             pb.GetResourceIdentitySchemas.Request(), context=None
         )
@@ -60,7 +71,10 @@ async def test_includes_only_resources_declaring_identity() -> None:
 async def test_converts_the_identity_schema() -> None:
     """Uses a non-default version so the assertion distinguishes a carried value from
     protobuf's zero default -- identity versions start at 0."""
-    with patch(f"{MODULE}.get_filtered_components", return_value={"demo": _resource_with_identity(version=2)}):
+    with patch(
+        f"{MODULE}.get_filtered_components",
+        side_effect=_only_resources({"demo": _resource_with_identity(version=2)}),
+    ):
         response = await GetResourceIdentitySchemasHandler(
             pb.GetResourceIdentitySchemas.Request(), context=None
         )
@@ -73,7 +87,10 @@ async def test_converts_the_identity_schema() -> None:
 
 @pytest.mark.asyncio
 async def test_returns_empty_map_when_no_resource_declares_identity() -> None:
-    with patch(f"{MODULE}.get_filtered_components", return_value={"demo": _resource_without_identity()}):
+    with patch(
+        f"{MODULE}.get_filtered_components",
+        side_effect=_only_resources({"demo": _resource_without_identity()}),
+    ):
         response = await GetResourceIdentitySchemasHandler(
             pb.GetResourceIdentitySchemas.Request(), context=None
         )
@@ -89,7 +106,7 @@ async def test_conversion_failure_degrades_to_a_warning() -> None:
     broken.get_identity_schema.side_effect = ValueError("bad identity schema")
     broken._is_test_only = False
 
-    with patch(f"{MODULE}.get_filtered_components", return_value={"broken": broken}):
+    with patch(f"{MODULE}.get_filtered_components", side_effect=_only_resources({"broken": broken})):
         response = await GetResourceIdentitySchemasHandler(
             pb.GetResourceIdentitySchemas.Request(), context=None
         )
@@ -105,7 +122,7 @@ async def test_duck_typed_resource_without_get_identity_schema_produces_no_diagn
     """A registered resource that never inherited BaseResource has no
     get_identity_schema(). A missing method means the same as one returning None --
     it must be omitted from identity_schemas without raising a warning diagnostic."""
-    with patch(f"{MODULE}.get_filtered_components", return_value={"duck": DuckTypedResource}):
+    with patch(f"{MODULE}.get_filtered_components", side_effect=_only_resources({"duck": DuckTypedResource})):
         response = await GetResourceIdentitySchemasHandler(
             pb.GetResourceIdentitySchemas.Request(), context=None
         )

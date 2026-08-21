@@ -40,7 +40,22 @@ async def _get_resource_identity_schemas_impl(
     identity_schemas: dict[str, pb.ResourceIdentitySchema] = {}
     diagnostics: list[pb.Diagnostic] = []
 
-    for name, resource_class in get_filtered_components("resource").items():
+    # List resources carry an identity schema too, and Terraform looks it up by
+    # the *list* resource's type name -- `mycloud_servers`, not the
+    # `mycloud_server` it borrows the schema from. Publishing only managed
+    # resources here made `terraform query` fail with
+    #
+    #     Identity schema not found for resource type mycloud_servers;
+    #     this is a bug in the provider - please report it there
+    #
+    # which is exactly right: identity is mandatory for a list resource, so one
+    # missing from this map cannot return a single result.
+    candidates: list[tuple[str, Any]] = [
+        *get_filtered_components("resource").items(),
+        *get_filtered_components("list_resource").items(),
+    ]
+
+    for name, resource_class in candidates:
         try:
             schema = resolve_identity_schema(resource_class)
             if schema is None:
