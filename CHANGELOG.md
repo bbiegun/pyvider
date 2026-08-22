@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-22
+
+### Fixed
+
+- **An absent state no longer panics Terraform.** `ReadStateBytes` sent no `range` on the empty-state path. `Range` is a message field, so unset is a nil `*StateRange` on the other side, and `grpc_provider.go:1610` dereferences it with no nil check. The result is not a diagnostic but a crashed process, on `terraform init` against a workspace that has no state yet -- which is the first thing anyone does.
+- **`range.end` is the index of the last byte, not one past it.** Core writes `End: totalBytesProcessed + len(chunk) - 1` and decides which chunk is the last with `Range.End < TotalLength-1`, so an exclusive end moved that boundary by a byte and misclassified the second-to-last chunk whenever the payload ended exactly one byte past a chunk boundary.
+- **Chunk sizes follow Core's.** It proposes `chunks.DefaultStateStoreChunkSize` (8 MB) and refuses to negotiate above `chunks.MaxStateStoreChunkSize` (128 MB). This defaulted to 32 KB and had no ceiling, so an oversized proposal was echoed back and became this provider's configuration failure rather than the client's.
+
+### Changed
+
+- **`pyvider-rpcplugin>=0.4.2`**, which raises the gRPC server's message limits from the 4 MB default to Terraform's 256 MB. A state store negotiates 8 MB chunks, so on anything older every chunk of a multi-chunk write is refused before it arrives.
+
+Verified against Terraform built from source with the pluggable-state-storage experiment enabled: `init`, `apply`, `plan` and `destroy` all succeed with state served entirely by the provider, and an 18 MB state reads back in three chunks with no size warnings from Core.
+
+
+
 ## [0.5.2] - 2026-08-21
 
 ### Fixed
