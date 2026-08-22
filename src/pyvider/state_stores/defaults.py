@@ -16,7 +16,12 @@ from typing import Final
 
 # Wire chunking. Terraform negotiates a chunk size during ConfigureStateStore;
 # this value is used when the client does not supply one.
-DEFAULT_STATE_STORE_CHUNK_SIZE: Final[int] = 32_768
+# Core proposes this size and validates what comes back, so the two constants
+# are its, not ours: `chunks.DefaultStateStoreChunkSize` is 8 MB and
+# `chunks.MaxStateStoreChunkSize` is 128 MB, above which Core refuses to
+# negotiate at all ("Failed to negotiate acceptable chunk size").
+DEFAULT_STATE_STORE_CHUNK_SIZE: Final[int] = 8 << 20  # 8 MB
+MAX_STATE_STORE_CHUNK_SIZE: Final[int] = 128 << 20  # 128 MB
 
 # Lease duration for a state lock, in seconds. A lock whose lease has expired is
 # reclaimable by any other process, which is what keeps a crashed provider from

@@ -363,15 +363,31 @@ class ProviderHandler(ProviderServicer):
             )
 
             if not state_bytes:
-                yield pb.ReadStateBytes.Response(total_length=0, diagnostics=[])
+                # A range is sent even when there is nothing to send. Core reads
+                # `chunk.Range.End` on every chunk it receives without checking
+                # for nil, so omitting it dereferences a nil *StateRange and
+                # panics the whole Terraform process -- on the very first read
+                # of a workspace that does not have state yet.
+                yield pb.ReadStateBytes.Response(
+                    bytes=b"",
+                    total_length=0,
+                    range=pb.StateRange(start=0, end=0),
+                    diagnostics=[],
+                )
                 return
 
-            for start_pos in range(0, len(state_bytes), chunk_size):
-                end_pos = min(start_pos + chunk_size, len(state_bytes))
+            total_length = len(state_bytes)
+            for start_pos in range(0, total_length, chunk_size):
+                end_pos = min(start_pos + chunk_size, total_length)
                 yield pb.ReadStateBytes.Response(
                     bytes=state_bytes[start_pos:end_pos],
-                    total_length=len(state_bytes),
-                    range=pb.StateRange(start=start_pos, end=end_pos),
+                    total_length=total_length,
+                    # `end` is the index of the last byte in the chunk, not one
+                    # past it. Core writes the same form on the way in --
+                    # `End: totalBytesProcessed + len(chunk) - 1` -- and decides
+                    # which chunk is the last with `Range.End < TotalLength-1`,
+                    # so an exclusive end shifts that boundary by one byte.
+                    range=pb.StateRange(start=start_pos, end=end_pos - 1),
                     diagnostics=[],
                 )
         except Exception:

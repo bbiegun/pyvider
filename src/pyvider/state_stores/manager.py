@@ -30,6 +30,7 @@ from pyvider.state_stores.defaults import (
     ENV_BACKEND,
     ENV_LOCK_TTL,
     ENV_PATH,
+    MAX_STATE_STORE_CHUNK_SIZE,
 )
 from pyvider.state_stores.filesystem import FileSystemStateStore
 from pyvider.state_stores.memory import InMemoryStateStore
@@ -79,8 +80,16 @@ def default_lock_ttl_seconds() -> float:
 
 
 def normalize_chunk_size(chunk_size: int) -> int:
-    """Clamp a client-supplied chunk size to a usable value."""
-    return chunk_size if chunk_size > 0 else DEFAULT_STATE_STORE_CHUNK_SIZE
+    """Clamp a client-supplied chunk size to a value Core will accept.
+
+    The upper bound matters as much as the lower one. Core checks the size a
+    provider answers with against its own maximum and fails configuration if it
+    is exceeded, so echoing back an oversized proposal turns a client's mistake
+    into this provider's error.
+    """
+    if chunk_size <= 0:
+        return DEFAULT_STATE_STORE_CHUNK_SIZE
+    return min(chunk_size, MAX_STATE_STORE_CHUNK_SIZE)
 
 
 class StateStoreManager:
