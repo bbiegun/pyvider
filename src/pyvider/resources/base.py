@@ -192,6 +192,13 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         return cast(tuple[Any, ...], attrs.fields(target_cls))
 
     @classmethod
+    def _is_null(cls, value: Any) -> bool:
+        """True when a decoded attribute carries no value, as opposed to an unknown one."""
+        if isinstance(value, CtyValue):
+            return bool(value.is_null)
+        return value is None
+
+    @classmethod
     def _handle_attrs_conversion(cls, data: Any, target_cls: type) -> Any | None:
         if not isinstance(data, dict):
             logger.warning(
@@ -210,6 +217,13 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         for name, field_def in target_fields.items():
             if name in data and field_def.init:
                 raw_value = data[name]
+                # A null value means "the practitioner omitted this attribute". The
+                # protocol has no way to send a schema default, so passing None here
+                # would override the attrs field default the resource declared.
+                # Leave the keyword out and let attrs apply it. Unknown values are
+                # NOT null, so they still come through as None and stay unknown.
+                if cls._is_null(raw_value) and field_def.default is not attrs.NOTHING:
+                    continue
                 converted_value = cls._cty_to_attrs_recursive(raw_value, field_def.type)
                 # Include the field even if converted_value is None
                 # This handles unknown/computed values during validation/planning
@@ -373,10 +387,9 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         # Use explicit 'is not None' instead
         # Force write-only attributes to None (null in state)
         schema = self.get_schema()
+        schema_attributes = getattr(schema.block, "attributes", {}) or {}
         write_only_attrs = {
-            name
-            for name, attr in getattr(schema.block, "attributes", {}).items()
-            if getattr(attr, "write_only", False)
+            name for name, attr in schema_attributes.items() if getattr(attr, "write_only", False)
         }
         for attr_name in write_only_attrs:
             base_plan[attr_name] = None
@@ -404,6 +417,35 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
                             base_plan[key] = cty_to_native(value)
                         else:
                             base_plan[key] = value
+
+                self._apply_schema_defaults(base_plan, schema_attributes, cty_value_dict, write_only_attrs)
+
+    @staticmethod
+    def _apply_schema_defaults(
+        base_plan: dict[str, Any],
+        schema_attributes: dict[str, Any],
+        config_values: dict[str, Any],
+        write_only_attrs: set[str],
+    ) -> None:
+        """Fill omitted attributes with their declared `PvsAttribute.default`.
+
+        The plugin protocol schema has no default-value field, so Terraform sends
+        an omitted optional attribute as null and never learns the default. The
+        provider has to resolve it while planning; otherwise the value the resource
+        actually uses would not be the value Terraform planned.
+        """
+        for name, attribute in schema_attributes.items():
+            default = getattr(attribute, "default", None)
+            if default is None or name in write_only_attrs:
+                continue
+            # Anything already planned -- from planned state or from config -- wins.
+            if base_plan.get(name) is not None:
+                continue
+            config_value = config_values.get(name)
+            # An unknown value is a value that is not yet known, not an absent one.
+            if isinstance(config_value, CtyValue) and config_value.is_unknown:
+                continue
+            base_plan[name] = default
 
     async def plan(self, ctx: ResourceContext) -> tuple[dict[str, Any] | None, PrivateStateType | None]:
         validation_errors = await self.validate(ctx.config)

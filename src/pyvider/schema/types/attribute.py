@@ -150,5 +150,9 @@ class PvsAttribute:
                     f"imperatively from the resource's plan hook via {call}"
                 )
 
+        # Rule 8: An attribute with a default is Computed.
+        if self.default is not None and not self.required and not self.write_only:
+            object.__setattr__(self, "computed", True)
+
 
 # 🐍🏗️🔚

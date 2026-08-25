@@ -213,6 +213,14 @@ description = a_str(
 )
 ```
 
+An attribute with a `default` is marked Optional **and** Computed for you. A
+default is a value the provider supplies when the practitioner does not, and
+Terraform rejects a planned value on an attribute that is not Computed. The
+practical consequence is standard Optional + Computed behaviour: the default
+fills an omitted attribute on create, and once a value is in state, removing
+the attribute from the configuration leaves that value in place rather than
+reverting to the default.
+
 ### Computed Attributes
 
 Computed attributes are set by the provider, not by users:
