@@ -98,7 +98,7 @@ async def _configure_provider_impl(
         )
 
         provider_schema = provider_instance.schema
-        config_cty = unmarshal(request.config, schema=provider_schema.block)
+        config_cty = unmarshal(request.config, schema=provider_schema.block, apply_defaults=True)
 
         if config_cty.is_unknown:
             logger.warning(

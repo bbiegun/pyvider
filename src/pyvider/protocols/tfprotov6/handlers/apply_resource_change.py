@@ -107,7 +107,7 @@ async def _unmarshal_request_data(
 ) -> tuple[Any, Any, Any]:
     with operation_context(OperationContext.APPLY):
         prior_state_cty = unmarshal(request.prior_state, schema=resource_schema.block)
-        config_cty_unmarked = unmarshal(request.config, schema=resource_schema.block)
+        config_cty_unmarked = unmarshal(request.config, schema=resource_schema.block, apply_defaults=True)
         planned_state_cty = unmarshal(request.planned_state, schema=resource_schema.block)
     return prior_state_cty, config_cty_unmarked, planned_state_cty
 

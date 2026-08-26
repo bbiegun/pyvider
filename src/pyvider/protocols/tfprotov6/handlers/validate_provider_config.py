@@ -52,7 +52,7 @@ async def _validate_provider_config_impl(
             provider_schema = provider_instance.schema
             config_cty = None
             try:
-                config_cty = unmarshal(request.config, schema=provider_schema.block)
+                config_cty = unmarshal(request.config, schema=provider_schema.block, apply_defaults=True)
             except Exception as e:
                 # Don't fail validation if we can't parse config for logging
                 logger.debug(

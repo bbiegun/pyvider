@@ -420,32 +420,46 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
 
                 self._apply_schema_defaults(base_plan, schema_attributes, cty_value_dict, write_only_attrs)
 
-    @staticmethod
+    @classmethod
     def _apply_schema_defaults(
+        cls,
         base_plan: dict[str, Any],
         schema_attributes: dict[str, Any],
         config_values: dict[str, Any],
         write_only_attrs: set[str],
     ) -> None:
-        """Fill omitted attributes with their declared `PvsAttribute.default`.
+        """Make the plan agree with the effective configuration for defaulted attributes.
 
         The plugin protocol schema has no default-value field, so Terraform sends
-        an omitted optional attribute as null and never learns the default. The
-        provider has to resolve it while planning; otherwise the value the resource
-        actually uses would not be the value Terraform planned.
+        an attribute the practitioner omitted as null and never learns the
+        default. The provider resolves it into the configuration itself, which is
+        what the resource reads at apply time -- so the plan has to carry the same
+        value, or apply returns a state Terraform did not plan.
+
+        For an attribute that declares a default the effective configuration
+        therefore wins outright, prior state included. Prior state losing here is
+        deliberate: an omitted attribute means "whatever the provider considers
+        the default", and if the plan kept a stale non-default value from state
+        while `ctx.config` reported the default, the two would disagree and apply
+        would fail the refinement check.
         """
         for name, attribute in schema_attributes.items():
             default = getattr(attribute, "default", None)
             if default is None or name in write_only_attrs:
                 continue
-            # Anything already planned -- from planned state or from config -- wins.
-            if base_plan.get(name) is not None:
-                continue
             config_value = config_values.get(name)
             # An unknown value is a value that is not yet known, not an absent one.
             if isinstance(config_value, CtyValue) and config_value.is_unknown:
                 continue
-            base_plan[name] = default
+            if cls._is_null(config_value):
+                # No resolved configuration to follow -- fall back to the declared
+                # default, but never over a value the plan already holds.
+                if base_plan.get(name) is None:
+                    base_plan[name] = default
+                continue
+            base_plan[name] = (
+                cty_to_native(config_value) if isinstance(config_value, CtyValue) else config_value
+            )
 
     async def plan(self, ctx: ResourceContext) -> tuple[dict[str, Any] | None, PrivateStateType | None]:
         validation_errors = await self.validate(ctx.config)

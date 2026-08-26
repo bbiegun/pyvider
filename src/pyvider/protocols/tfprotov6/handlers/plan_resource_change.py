@@ -92,7 +92,7 @@ async def _unmarshal_request_data(
     request: pb.PlanResourceChange.Request, resource_schema: Any
 ) -> tuple[Any, Any, Any]:
     with operation_context(OperationContext.PLAN):
-        config_cty = unmarshal(request.config, schema=resource_schema.block)
+        config_cty = unmarshal(request.config, schema=resource_schema.block, apply_defaults=True)
         prior_state_cty = unmarshal(request.prior_state, schema=resource_schema.block)
         proposed_new_state_cty = unmarshal(request.proposed_new_state, schema=resource_schema.block)
     return config_cty, prior_state_cty, proposed_new_state_cty

@@ -215,11 +215,21 @@ description = a_str(
 
 An attribute with a `default` is marked Optional **and** Computed for you. A
 default is a value the provider supplies when the practitioner does not, and
-Terraform rejects a planned value on an attribute that is not Computed. The
-practical consequence is standard Optional + Computed behaviour: the default
-fills an omitted attribute on create, and once a value is in state, removing
-the attribute from the configuration leaves that value in place rather than
-reverting to the default.
+Terraform rejects a planned value on an attribute that is not Computed.
+
+The default is resolved into the configuration itself, before your code sees
+it, so `ctx.config` reports the effective value during validate, plan and
+apply alike -- your config class does not have to repeat the default, and you
+do not need a helper that substitutes it at apply time. Prior state is left
+alone: a null there is a recorded absence, not an omission.
+
+Because the effective configuration is what your resource reads, it is also
+what gets planned. Removing a defaulted attribute from the configuration
+therefore plans a change back to the default rather than leaving the last
+value in state -- unlike a plain Optional + Computed attribute, where an
+omitted value is retained. An omitted attribute means "whatever the provider
+considers the default", and the plan has to say the same thing `ctx.config`
+does.
 
 ### Computed Attributes
 

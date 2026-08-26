@@ -58,7 +58,7 @@ async def _validate_ephemeral_resource_config_impl(
             )
 
         schema = resource_class.get_schema()
-        config_cty = unmarshal(request.config, schema=schema.block)
+        config_cty = unmarshal(request.config, schema=schema.block, apply_defaults=True)
 
         # Perform built-in CTY validation first. This will raise on failure.
         schema.validate_config(config_cty.value)

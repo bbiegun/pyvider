@@ -65,7 +65,7 @@ async def _validate_data_resource_config_impl(
             return response
 
         ds_schema = ds_class.get_schema()
-        config_cty = unmarshal(request.config, schema=ds_schema.block)
+        config_cty = unmarshal(request.config, schema=ds_schema.block, apply_defaults=True)
 
         # See validate_resource_config.py: cty 0.5 no longer refuses a
         # present-but-null value for a required attribute, so the schema

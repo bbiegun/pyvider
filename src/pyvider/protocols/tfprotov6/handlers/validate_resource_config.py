@@ -66,7 +66,7 @@ async def _validate_resource_config_impl(
 
         resource_schema = resource_class.get_schema()
 
-        config_cty = unmarshal(request.config, schema=resource_schema.block)
+        config_cty = unmarshal(request.config, schema=resource_schema.block, apply_defaults=True)
 
         # cty 0.5 stopped rejecting a null for a non-optional attribute (see
         # pyvider.schema.required) -- Terraform sends a present null for every

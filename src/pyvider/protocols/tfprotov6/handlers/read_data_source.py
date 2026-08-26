@@ -78,7 +78,7 @@ async def _read_data_source_impl(
         check_test_only_access(ds_class, request.type_name, "data_source")
 
         ds_schema = ds_class.get_schema()
-        config_cty = unmarshal(request.config, schema=ds_schema.block)
+        config_cty = unmarshal(request.config, schema=ds_schema.block, apply_defaults=True)
         config_instance = cty_to_attrs_instance(config_cty, ds_class.config_class)
 
         data_source = ds_class()

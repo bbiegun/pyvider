@@ -20,7 +20,7 @@ import pytest
 from pyvider.cty import CtyObject, CtyString, CtyValue
 from pyvider.resources.base import BaseResource
 from pyvider.resources.context import ResourceContext
-from pyvider.schema import PvsSchema, a_str, s_resource
+from pyvider.schema import PvsSchema, a_str, resolve_schema_defaults, s_resource
 
 DEFAULT_SIZE = "small"
 
@@ -168,6 +168,33 @@ class TestPlanning:
 
         assert planned_state is not None
         assert planned_state["size"] == "large"
+
+    @pytest.mark.asyncio
+    async def test_stale_state_value_loses_to_the_default_once_the_config_omits_it(self) -> None:
+        """An omitted attribute plans the default, even when state holds another value.
+
+        This mirrors the real pipeline: the configuration reaching `plan()` has
+        already had its defaults resolved, and Terraform's proposed new state
+        carries the prior value forward. If the plan kept that prior value while
+        `ctx.config` reported the default, apply would return a state the plan
+        did not contain and fail the refinement check.
+        """
+        config_cty = resolve_schema_defaults(
+            _config_cty(CtyValue.null(CtyString())), Widget.get_schema().block
+        )
+        assert config_cty is not None
+        ctx = ResourceContext(
+            config=Widget.from_cty(config_cty, WidgetConfig),
+            state=WidgetState(name="example", size="large", id="w-1"),
+            planned_state=WidgetState(name="example", size="large", id="w-1"),
+            planned_state_cty=CONFIG_TYPE.validate({"name": "example", "size": "large", "id": "w-1"}),
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Widget().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["size"] == DEFAULT_SIZE
 
     @pytest.mark.asyncio
     async def test_unknown_value_stays_unknown_in_the_plan(self) -> None:
