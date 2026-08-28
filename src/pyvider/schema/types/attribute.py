@@ -40,6 +40,13 @@ class PvsAttribute:
         - Computed
         This hook enforces that logic.
         """
+        is_req, is_opt, is_comp = self._normalize_flags()
+        self._validate_flag_combinations(is_req, is_opt, is_comp)
+        self._validate_requires_replace()
+        self._apply_default_rules(is_req, is_opt, is_comp)
+
+    def _normalize_flags(self) -> tuple[bool, bool, bool]:
+        """Applies the Required/Optional/Computed defaulting rules."""
         # Use object.__setattr__ because the instance is frozen.
         is_req = self.required
         is_opt = self.optional
@@ -54,6 +61,10 @@ class PvsAttribute:
         if is_req and is_opt:
             object.__setattr__(self, "optional", False)
 
+        return is_req, is_opt, is_comp
+
+    def _validate_flag_combinations(self, is_req: bool, is_opt: bool, is_comp: bool) -> None:
+        """Rejects Required/Optional/Computed combinations Terraform cannot express."""
         # Rule 3: An attribute can't be both Required and Computed.
         if is_req and is_comp:
             raise ValueError(
@@ -80,6 +91,8 @@ class PvsAttribute:
                 f"Current configuration: required={self.required}, optional={self.optional}, computed={self.computed}"
             )
 
+    def _validate_requires_replace(self) -> None:
+        """Rejects requires_replace placements that could never take effect."""
         # Rule 5: requires_replace is meaningless on a computed-only attribute.
         if self.requires_replace and self.computed and not self.required and not self.optional:
             raise ValueError(
@@ -150,6 +163,8 @@ class PvsAttribute:
                     f"imperatively from the resource's plan hook via {call}"
                 )
 
+    def _apply_default_rules(self, is_req: bool, is_opt: bool, is_comp: bool) -> None:
+        """Validates and normalizes the interaction between `default` and the flags."""
         # Rule 8: A computed-only attribute cannot have a default. A default is
         # the value used when the practitioner omits something they *could* have
         # written, and `computed=True` without `optional=True` means they cannot
