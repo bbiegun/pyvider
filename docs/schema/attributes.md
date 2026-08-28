@@ -285,6 +285,9 @@ config = a_obj({
 }, description="Configuration with defaults")
 ```
 
+Attributes inside nested blocks take defaults the same way -- see
+[Defaults Inside Blocks](blocks.md#defaults-inside-blocks).
+
 ## Validators
 
 Add validation logic to attributes:

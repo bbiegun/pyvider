@@ -173,6 +173,58 @@ A block that must appear exactly once:
 )
 ```
 
+## Defaults Inside Blocks
+
+Attributes inside a block support `default=` exactly like top-level attributes,
+and the examples above rely on it (`"port": a_num(default=5432)`).
+
+A default makes the attribute Optional + Computed in the schema sent to
+Terraform:
+
+```python
+"settings": b_single("settings",
+    attributes={
+        "size": a_str(default="small"),   # optional + computed
+        "label": a_str(),                 # optional
+    },
+)
+```
+
+```hcl
+resource "example_widget" "this" {
+  name = "example"
+
+  settings {
+    label = "primary"
+    # size omitted -> the provider resolves "small"
+  }
+}
+```
+
+The plugin protocol has no default-value field, so Terraform never learns what
+the provider considers the default. Pyvider resolves it on the way in --
+recursively, at any block depth -- so `ctx.config` reports `"small"` for the
+configuration above, and the plan is corrected to match.
+
+That correction matters most on update. If prior state holds `size = "large"`
+and the practitioner then removes `size` from the block, Terraform's proposed
+new state carries `"large"` forward, because as far as it knows nothing changed.
+Pyvider overrides it with the resolved default, so the plan shows
+`"large" -> "small"` and apply returns the state that was planned.
+
+Two rules limit the override:
+
+- Only attributes that **declare a default** are overridden. Everything else in
+  the proposed new state is Terraform's own merge of configuration and prior
+  state and is left untouched.
+- An **unknown** value is not an omitted one. A block attribute whose value
+  depends on something Terraform has not computed yet keeps its unknown and is
+  never replaced by the default.
+
+For repeated blocks, elements are paired with their configuration by position
+(`b_list`) or by key (`b_map`). `b_set` blocks have no stable order to pair on,
+so the override applies only when the block appears exactly once.
+
 ## Nested Blocks
 
 Blocks can contain other blocks:
