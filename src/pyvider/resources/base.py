@@ -22,7 +22,7 @@ from pyvider.cty import (
 from pyvider.cty.conversion import cty_to_native
 from pyvider.resources.context import ResourceContext
 from pyvider.resources.private_state import PrivateState
-from pyvider.schema import PvsSchema, merge_nested_block_defaults, resolves_from_configuration
+from pyvider.schema import PvsSchema, merge_schema_defaults_into_plan
 
 ResourceType = TypeVar("ResourceType")
 StateType = TypeVar("StateType")
@@ -458,54 +458,12 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
                         else:
                             base_plan[key] = value
 
-                self._apply_schema_defaults(base_plan, schema_attributes, cty_value_dict, write_only_attrs)
-                # Terraform resolves nothing about defaults, so a block that
-                # already exists in prior state comes back with the prior value
-                # for an attribute the practitioner omitted. The loop above
-                # cannot correct it: the block is already present in the plan,
-                # so the whole configured block is skipped.
-                merge_nested_block_defaults(base_plan, ctx.config_cty, schema.block)
-
-    @classmethod
-    def _apply_schema_defaults(
-        cls,
-        base_plan: dict[str, Any],
-        schema_attributes: dict[str, Any],
-        config_values: dict[str, Any],
-        write_only_attrs: set[str],
-    ) -> None:
-        """Make the plan agree with the effective configuration for defaulted attributes.
-
-        The plugin protocol schema has no default-value field, so Terraform sends
-        an attribute the practitioner omitted as null and never learns the
-        default. The provider resolves it into the configuration itself, which is
-        what the resource reads at apply time -- so the plan has to carry the same
-        value, or apply returns a state Terraform did not plan.
-
-        For an attribute that declares a default the effective configuration
-        therefore wins outright, prior state included. Prior state losing here is
-        deliberate: an omitted attribute means "whatever the provider considers
-        the default", and if the plan kept a stale non-default value from state
-        while `ctx.config` reported the default, the two would disagree and apply
-        would fail the refinement check.
-        """
-        for name, attribute in schema_attributes.items():
-            default = getattr(attribute, "default", None)
-            if default is None or name in write_only_attrs:
-                continue
-            config_value = config_values.get(name)
-            # An unknown value is a value that is not yet known, not an absent one.
-            if isinstance(config_value, CtyValue) and config_value.is_unknown:
-                continue
-            if not resolves_from_configuration(attribute) or cls._is_null(config_value):
-                # No resolved configuration to follow -- fall back to the declared
-                # default, but never over a value the plan already holds.
-                if base_plan.get(name) is None:
-                    base_plan[name] = default
-                continue
-            base_plan[name] = (
-                cty_to_native(config_value) if isinstance(config_value, CtyValue) else config_value
-            )
+                # Terraform resolves nothing about defaults, so an attribute the
+                # practitioner omitted comes back carrying the prior value --
+                # at the top level and inside nested blocks alike. The loop
+                # above cannot correct either: the key is already present in
+                # the plan, so the configured value is skipped.
+                merge_schema_defaults_into_plan(base_plan, ctx.config_cty, schema.block)
 
     async def plan(self, ctx: ResourceContext) -> tuple[dict[str, Any] | None, PrivateStateType | None]:
         validation_errors = await self.validate(ctx.config)

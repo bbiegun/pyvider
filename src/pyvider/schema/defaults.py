@@ -85,36 +85,36 @@ def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> Cty
     return attrs.evolve(value, value=resolved)
 
 
-def merge_nested_block_defaults(plan: dict[str, Any], config: CtyValue | None, block: PvsObjectType) -> None:
-    """Push defaults resolved inside nested blocks into `plan`, in place.
+def merge_schema_defaults_into_plan(
+    plan: dict[str, Any], config: CtyValue | None, block: PvsObjectType
+) -> None:
+    """Make `plan` agree with the effective configuration for defaulted attributes, in place.
 
-    Defaults are resolved recursively into the decoded configuration, but
-    Terraform knows nothing about them: an attribute the practitioner omitted
-    inside a block that already exists in prior state comes back in the proposed
-    new state carrying the *prior* value. A top-level attribute is corrected by
-    `BaseResource._apply_schema_defaults`, but a nested one is not -- the plan
-    would keep the stale value while `ctx.config` reports the default, and apply
-    would return a state Terraform did not plan.
+    Defaults are resolved into the decoded configuration, which is what a
+    resource reads at apply time -- so the plan has to carry the same value, or
+    apply returns a state Terraform did not plan. Terraform itself knows nothing
+    about provider-side defaults: an attribute the practitioner omitted comes
+    back in the proposed new state carrying the *prior* value, at the top level
+    and inside nested blocks alike.
 
-    Only attributes that declare a default are overridden. Everything else in
-    the proposed new state is Terraform's own merge of configuration and prior
-    state and is left exactly as it arrived.
+    For an attribute that declares a default the effective configuration
+    therefore wins outright, prior state included. Prior state losing here is
+    deliberate: an omitted attribute means "whatever the provider considers the
+    default", and if the plan kept a stale non-default value while `ctx.config`
+    reported the default, the two would disagree and apply would fail the
+    refinement check.
+
+    Only attributes that declare a default are touched. Everything else in the
+    proposed new state is Terraform's own merge of configuration and prior state
+    and is left exactly as it arrived.
     """
-    if not isinstance(config, CtyValue) or config.is_null or config.is_unknown:
-        return
-    if not isinstance(config.value, Mapping):
-        return
-
-    for nested in block.block_types:
-        if nested.type_name not in plan:
-            continue
-        plan[nested.type_name] = _merge_nested_into_plan(
-            plan[nested.type_name], config.value.get(nested.type_name), nested
-        )
+    merged = _merge_block_into_plan(plan, config, block)
+    if merged is not plan:
+        plan.update(merged)
 
 
 def _merge_block_into_plan(plan_value: Any, config_value: Any, block: PvsObjectType) -> Any:
-    """Return one planned block value with its defaulted attributes corrected."""
+    """Return one planned block value -- root object included -- with its defaults corrected."""
     if not isinstance(plan_value, dict):
         # An absent or not-yet-known block has nothing to merge into.
         return plan_value
@@ -127,24 +127,37 @@ def _merge_block_into_plan(plan_value: Any, config_value: Any, block: PvsObjectT
     merged = dict(plan_value)
 
     for name, attribute in block.attributes.items():
-        if not resolves_from_configuration(attribute):
-            continue
-        resolved = config_values.get(name)
-        # An unknown value is not yet known, not absent; a null one means the
-        # default was never resolved, and inventing it here would go behind
-        # `ctx.config`'s back.
-        if not isinstance(resolved, CtyValue) or resolved.is_unknown or resolved.is_null:
-            continue
-        merged[name] = cty_to_native(resolved)
+        _merge_attribute_default(merged, name, attribute, config_values.get(name))
 
-    for deeper in block.block_types:
-        if deeper.type_name not in merged:
+    for nested in block.block_types:
+        if nested.type_name not in merged:
             continue
-        merged[deeper.type_name] = _merge_nested_into_plan(
-            merged[deeper.type_name], config_values.get(deeper.type_name), deeper
+        merged[nested.type_name] = _merge_nested_into_plan(
+            merged[nested.type_name], config_values.get(nested.type_name), nested
         )
 
     return merged
+
+
+def _merge_attribute_default(
+    merged: dict[str, Any], name: str, attribute: PvsAttribute, resolved: Any
+) -> None:
+    """Correct one planned attribute against the value the configuration resolved."""
+    if attribute.default is None or attribute.write_only:
+        # A write-only value is never stored, so a default would put into the
+        # plan what must show null.
+        return
+    # An unknown value is not yet known, not absent: Terraform is about to
+    # compute it, and planning the default would contradict that.
+    if isinstance(resolved, CtyValue) and resolved.is_unknown:
+        return
+    if not resolves_from_configuration(attribute) or _is_null(resolved):
+        # No resolved configuration to follow -- fall back to the declared
+        # default, but never over a value the plan already holds.
+        if merged.get(name) is None:
+            merged[name] = attribute.default
+        return
+    merged[name] = cty_to_native(resolved) if isinstance(resolved, CtyValue) else resolved
 
 
 def _merge_nested_into_plan(plan_value: Any, config_value: Any, nested: PvsNestedBlock) -> Any:

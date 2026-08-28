@@ -5,7 +5,7 @@
 
 
 from pyvider.schema.defaults import (
-    merge_nested_block_defaults,
+    merge_schema_defaults_into_plan,
     resolve_schema_defaults,
     resolves_from_configuration,
 )
@@ -66,7 +66,7 @@ __all__ = [
     "b_map",
     "b_set",
     "b_single",
-    "merge_nested_block_defaults",
+    "merge_schema_defaults_into_plan",
     "resolve_schema_defaults",
     "resolves_from_configuration",
     "s_data_source",

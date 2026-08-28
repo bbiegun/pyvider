@@ -24,7 +24,7 @@ from pyvider.schema import (
     b_map,
     b_set,
     b_single,
-    merge_nested_block_defaults,
+    merge_schema_defaults_into_plan,
     resolve_schema_defaults,
     resolves_from_configuration,
     s_resource,
@@ -196,7 +196,7 @@ def _merge_config(**overrides: object) -> CtyValue:
 
 
 class TestNestedPlanMerge:
-    """`merge_nested_block_defaults` corrects a plan that retained prior state.
+    """`merge_schema_defaults_into_plan` corrects a plan that retained prior state.
 
     Terraform's proposed new state keeps the prior value of an attribute the
     practitioner omitted, because the protocol never told it there was a
@@ -206,28 +206,28 @@ class TestNestedPlanMerge:
     def test_retained_single_block_value_is_corrected(self) -> None:
         plan = {"options": {"mode": "slow", "label": "primary", "tuning": {"level": "low"}}}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan["options"]["mode"] == "fast"
 
     def test_attribute_without_a_default_keeps_the_proposed_value(self) -> None:
         plan = {"options": {"mode": "slow", "label": "stale", "tuning": {"level": "low"}}}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan["options"]["label"] == "stale"
 
     def test_blocks_nested_inside_blocks_are_corrected(self) -> None:
         plan = {"options": {"mode": "fast", "label": "primary", "tuning": {"level": "high"}}}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan["options"]["tuning"]["level"] == "low"
 
     def test_list_elements_are_corrected_by_position(self) -> None:
         plan = {"port": [{"enabled": False}]}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan["port"][0]["enabled"] is True
 
@@ -236,14 +236,14 @@ class TestNestedPlanMerge:
         # once the counts differ.
         plan = {"port": [{"enabled": False}, {"enabled": False}]}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert [element["enabled"] for element in plan["port"]] == [False, False]
 
     def test_map_elements_are_corrected_by_key(self) -> None:
         plan = {"zone": {"a": {"enabled": False}, "b": {"enabled": False}}}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan["zone"]["a"]["enabled"] is True
         # "b" is not in the configuration, so there is no default to follow.
@@ -252,7 +252,7 @@ class TestNestedPlanMerge:
     def test_single_element_set_is_corrected(self) -> None:
         plan = {"tag": [{"enabled": False}]}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan["tag"][0]["enabled"] is True
 
@@ -262,7 +262,7 @@ class TestNestedPlanMerge:
         config = _merge_config(tag=[{"enabled": True}, {"enabled": False}])
         plan = {"tag": [{"enabled": False}, {"enabled": False}]}
 
-        merge_nested_block_defaults(plan, config, MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, config, MERGE_SCHEMA.block)
 
         assert [element["enabled"] for element in plan["tag"]] == [False, False]
 
@@ -270,7 +270,7 @@ class TestNestedPlanMerge:
         config = _merge_config(options=CtyValue.null(MERGE_SCHEMA.block.block_types[0].block.to_cty_type()))
         plan = {"options": {"mode": "slow", "label": "primary", "tuning": {"level": "low"}}}
 
-        merge_nested_block_defaults(plan, config, MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, config, MERGE_SCHEMA.block)
 
         assert plan["options"]["mode"] == "slow"
 
@@ -278,14 +278,14 @@ class TestNestedPlanMerge:
         for config in (CtyValue.null(MERGE_TYPE), CtyValue.unknown(MERGE_TYPE), None):
             plan = {"port": [{"enabled": False}]}
 
-            merge_nested_block_defaults(plan, config, MERGE_SCHEMA.block)
+            merge_schema_defaults_into_plan(plan, config, MERGE_SCHEMA.block)
 
             assert plan["port"][0]["enabled"] is False
 
     def test_block_absent_from_the_plan_is_not_invented(self) -> None:
         plan: dict[str, object] = {"name": "example"}
 
-        merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
+        merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan == {"name": "example"}
 
