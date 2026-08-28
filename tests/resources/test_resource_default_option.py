@@ -421,7 +421,12 @@ class TokenState:
 
 
 class Tokened(BaseResource[Any, TokenState, TokenConfig]):
-    """A resource with a computed-only attribute that declares a fallback."""
+    """The supported way to give a computed-only attribute a fallback.
+
+    `a_str(computed=True, default=...)` is refused by the schema, so the
+    fallback lives in the resource's own create logic, where the provider's
+    other computed values are produced.
+    """
 
     config_class = TokenConfig
     state_class = TokenState
@@ -431,12 +436,16 @@ class Tokened(BaseResource[Any, TokenState, TokenConfig]):
         return s_resource(
             attributes={
                 "name": a_str(required=True),
-                "token": a_str(computed=True, default="unset"),
+                "token": a_str(computed=True),
             }
         )
 
     async def _validate_config(self, config: TokenConfig) -> list[str]:
         return []
+
+    async def _create(self, ctx: ResourceContext, base_plan: dict[str, Any]) -> tuple[dict[str, Any], None]:
+        base_plan["token"] = "unset"
+        return base_plan, None
 
     async def read(self, ctx: ResourceContext) -> TokenState | None:
         return ctx.state
@@ -448,21 +457,34 @@ class Tokened(BaseResource[Any, TokenState, TokenConfig]):
 TOKEN_TYPE = Tokened.get_schema().block.to_cty_type()
 
 
-class TestComputedOnlyDefaultInPlans:
-    """A computed-only default is a fallback, not a configured value.
+class TestComputedOnlyAttributes:
+    """A computed-only attribute is the provider's alone, defaults included."""
 
-    The practitioner cannot write the attribute, so its default must never beat
-    a value the provider computed on an earlier run -- otherwise every plan
-    would show a spurious diff back to the default.
-    """
+    def test_schema_refuses_a_computed_only_default(self) -> None:
+        with pytest.raises(ValueError, match="computed-only attribute cannot declare a default"):
+            s_resource(attributes={"token": a_str(computed=True, default="unset")})
 
     @pytest.mark.asyncio
-    async def test_computed_value_is_retained_over_the_default(self) -> None:
-        config_cty = resolve_schema_defaults(
-            TOKEN_TYPE.validate({"name": "example", "token": CtyValue.null(CtyString())}),
-            Tokened.get_schema().block,
+    async def test_resource_supplies_the_fallback_on_create(self) -> None:
+        config_cty = TOKEN_TYPE.validate({"name": "example", "token": CtyValue.null(CtyString())})
+        ctx = ResourceContext(
+            config=Tokened.from_cty(config_cty, TokenConfig, apply_defaults=True),
+            state=None,
+            config_cty=config_cty,
         )
-        assert config_cty is not None
+
+        planned_state, _ = await Tokened().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["token"] == "unset"
+
+    @pytest.mark.asyncio
+    async def test_computed_value_is_retained_on_update(self) -> None:
+        # Nothing in the configuration can contradict a computed-only attribute,
+        # so Terraform's proposed new state carries the previous value forward
+        # and the plan leaves it alone. This is the retention that a schema
+        # default would have silently overridden.
+        config_cty = TOKEN_TYPE.validate({"name": "example", "token": CtyValue.null(CtyString())})
         prior = TokenState(name="example", token="computed-last-run")
         ctx = ResourceContext(
             config=Tokened.from_cty(config_cty, TokenConfig, apply_defaults=True),
@@ -476,24 +498,6 @@ class TestComputedOnlyDefaultInPlans:
 
         assert planned_state is not None
         assert planned_state["token"] == "computed-last-run"
-
-    @pytest.mark.asyncio
-    async def test_default_fills_in_when_nothing_computed_a_value(self) -> None:
-        config_cty = resolve_schema_defaults(
-            TOKEN_TYPE.validate({"name": "example", "token": CtyValue.null(CtyString())}),
-            Tokened.get_schema().block,
-        )
-        assert config_cty is not None
-        ctx = ResourceContext(
-            config=Tokened.from_cty(config_cty, TokenConfig, apply_defaults=True),
-            state=None,
-            config_cty=config_cty,
-        )
-
-        planned_state, _ = await Tokened().plan(ctx)
-
-        assert planned_state is not None
-        assert planned_state["token"] == "unset"
 
 
 # 🐍🏗️🔚

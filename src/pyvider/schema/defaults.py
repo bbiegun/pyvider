@@ -32,25 +32,19 @@ from pyvider.schema.types.object import PvsObjectType
 def resolves_from_configuration(attribute: PvsAttribute) -> bool:
     """True when a null value for `attribute` means "the practitioner omitted it".
 
-    Only then is there an omission for a default to fill. Three kinds of
-    attribute are excluded, for three different reasons:
+    Only then is there an omission for a default to fill. Two kinds of attribute
+    are excluded, for two different reasons:
 
     - **Required**: a default would mask a missing required attribute from the
       required-attribute check that runs over this same value.
     - **Write-only**: the value is never stored, so a default would put into a
       plan what must show null.
-    - **Computed-only** (`computed=True` without `optional=True`): the
-      practitioner cannot write the attribute at all, so its null is not an
-      omission. Resolving a default into the configuration here would also make
-      the plan override it on every run -- `BaseResource._apply_schema_defaults`
-      lets a *configured* value beat prior state, so a computed-only attribute
-      would be dragged back to its default instead of retaining the value the
-      provider computed last time. Its default is still honoured, as the plan's
-      fallback when nothing computed a value.
+
+    A computed-only attribute would be a third, since the practitioner cannot
+    write it -- but `PvsAttribute` refuses that combination outright (Rule 5), so
+    it cannot reach here.
     """
-    if attribute.default is None or attribute.required or attribute.write_only:
-        return False
-    return bool(attribute.optional)
+    return not (attribute.default is None or attribute.required or attribute.write_only)
 
 
 def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> CtyValue | None:

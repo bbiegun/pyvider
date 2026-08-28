@@ -295,14 +295,17 @@ Three rules govern which attributes a default applies to:
   what an omitted attribute already is.
 - **A default makes the attribute Optional + Computed** (see above). Required
   and write-only attributes are untouched, since neither can be computed.
-- **A computed-only attribute keeps its default as a fallback.** Writing
-  `a_str(computed=True, default="x")` leaves the attribute computed-only: the
-  practitioner cannot set it, so `"x"` is used only when the provider computes
-  nothing, and never replaces a value it computed on an earlier run.
+- **A computed-only attribute cannot declare a default**, and the schema refuses
+  it. A default is the value used when the practitioner omits something they
+  could have written; `computed=True` without `optional=True` means they cannot
+  write it at all, so there is nothing to default from. Put the provider's
+  fallback in the resource's own create/read logic instead.
 
 ```python
-size  = a_str(default="small")                 # optional + computed
-token = a_str(computed=True, default="unset")  # computed only, "unset" is a fallback
+size  = a_str(default="small")   # optional + computed -- the practitioner may set it
+token = a_str(computed=True)     # the provider's alone; its fallback lives in _create()
+
+a_str(computed=True, default="unset")   # ValueError: computed-only cannot declare a default
 ```
 
 ## Validators

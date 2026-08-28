@@ -488,11 +488,6 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         the default", and if the plan kept a stale non-default value from state
         while `ctx.config` reported the default, the two would disagree and apply
         would fail the refinement check.
-
-        A computed-only attribute is the exception, and takes the null branch
-        below whatever its configuration holds: the practitioner cannot write it,
-        so its default is a fallback for "the provider computed nothing", never a
-        reason to discard what the provider computed last run.
         """
         for name, attribute in schema_attributes.items():
             default = getattr(attribute, "default", None)

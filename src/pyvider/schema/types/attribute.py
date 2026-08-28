@@ -150,24 +150,36 @@ class PvsAttribute:
                     f"imperatively from the resource's plan hook via {call}"
                 )
 
-        # Rule 8: An attribute with a default is Optional *and* Computed -- the
+        # Rule 8: A computed-only attribute cannot have a default. A default is
+        # the value used when the practitioner omits something they *could* have
+        # written, and `computed=True` without `optional=True` means they cannot
+        # write it at all -- so there is nothing to default from. The provider's
+        # own fallback for a value it computes belongs in the resource, not the
+        # schema.
+        if self.default is not None and is_comp and not is_opt and not is_req:
+            raise ValueError(
+                f"Invalid schema attribute configuration for '{self.name}': "
+                f"A computed-only attribute cannot declare a default.\n\n"
+                f"A default applies to an attribute the practitioner omitted, and a "
+                f"computed-only attribute cannot be set in configuration at all.\n\n"
+                f"Suggestion: Choose one of the following:\n"
+                f"  - optional=True, default=...: The practitioner may set it, and the "
+                f"provider uses the default otherwise\n"
+                f"  - computed=True, no default: The provider calculates the value; set "
+                f"your fallback in the resource's own create/read logic\n\n"
+                f"Current configuration: required={is_req}, optional={is_opt}, "
+                f"computed={is_comp}, default={self.default!r}"
+            )
+
+        # Rule 9: An attribute with a default is Optional *and* Computed -- the
         # practitioner may set it, and the provider fills it in otherwise.
         # Terraform rejects a provider-supplied value on an attribute that is not
         # computed, so a default is unusable without the flag.
         #
-        # Deliberately narrow. Required and write-only attributes cannot be
-        # computed, and an attribute the caller declared **computed-only**
-        # (`computed=True` without `optional=True`) stays computed-only: the
-        # practitioner cannot write it, so there is no omission to resolve. Its
-        # default is the provider's own fallback, applied to the plan when
-        # nothing computed a value, and never resolved into the configuration
-        # (see `pyvider.schema.defaults`).
-        #
-        # `default=None` is indistinguishable from declaring no default; there is
-        # no way to express "defaults to null", which is what a null already is.
-
-
-        # Rule 8: An attribute with a default is Computed.
+        # Required and write-only attributes are left alone: neither can be
+        # computed. `default=None` is indistinguishable from declaring no
+        # default; there is no way to express "defaults to null", which is what a
+        # null already is.
         if self.default is not None and not self.required and not self.write_only:
             object.__setattr__(self, "computed", True)
 

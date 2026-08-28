@@ -13,6 +13,7 @@ inconsistency.
 """
 
 import attrs
+import pytest
 
 from pyvider.cty import CtyBool, CtyString, CtyValue
 from pyvider.resources.base import BaseResource
@@ -290,32 +291,33 @@ class TestNestedPlanMerge:
 
 
 class TestComputedOnlyDefaults:
-    """`computed=True` without `optional=True` keeps its default out of config.
+    """A computed-only attribute cannot declare a default.
 
-    The practitioner cannot write a computed-only attribute, so its null is not
-    an omission. Resolving a default into the configuration would also make the
-    plan treat it as configured and override prior state on every run, dragging
-    the attribute back to its default instead of retaining what the provider
-    computed last time.
+    A default is the value used when the practitioner omits something they could
+    have written, and `computed=True` without `optional=True` means they cannot
+    write it at all. The provider's fallback for a value it computes belongs in
+    the resource, not the schema.
     """
 
-    def test_computed_only_attribute_stays_computed_only(self) -> None:
-        attribute = a_str(computed=True, default="x")
+    def test_computed_only_default_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="computed-only attribute cannot declare a default"):
+            a_str(computed=True, default="x")
+
+    def test_optional_and_computed_default_is_allowed(self) -> None:
+        # The flag combination `a_str(default=...)` produces on its own, and the
+        # one to reach for when a practitioner may set the value.
+        attribute = a_str(optional=True, computed=True, default="small")
+
+        assert attribute.optional is True
+        assert attribute.computed is True
+
+    def test_computed_only_without_a_default_is_allowed(self) -> None:
+        attribute = a_str(computed=True)
 
         assert attribute.computed is True
         assert attribute.optional is False
-        assert attribute.default == "x"
-
-    def test_computed_only_default_is_not_resolved_into_configuration(self) -> None:
-        schema = s_resource(attributes={"token": a_str(computed=True, default="x")})
-        config = schema.block.to_cty_type().validate({"token": CtyValue.null(CtyString())})
-
-        resolved = resolve_schema_defaults(config, schema.block)
-
-        assert resolved.value["token"].is_null
 
     def test_optional_and_computed_default_is_resolved(self) -> None:
-        # The flag combination `a_str(default=...)` produces on its own.
         schema = s_resource(attributes={"size": a_str(default="small")})
         config = schema.block.to_cty_type().validate({"size": CtyValue.null(CtyString())})
 
@@ -326,9 +328,11 @@ class TestComputedOnlyDefaults:
     def test_explicit_none_default_is_no_default(self) -> None:
         # `default=None` is indistinguishable from declaring no default; there is
         # no way to spell "defaults to null", which is what a null already is.
-        attribute = a_str(default=None)
+        # It is also why `computed=True, default=None` is accepted rather than
+        # rejected: there is no default there to contradict the flag.
+        attribute = a_str(computed=True, default=None)
 
-        assert attribute.computed is False
+        assert attribute.default is None
         assert resolves_from_configuration(attribute) is False
 
 
