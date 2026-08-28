@@ -64,7 +64,7 @@ async def _validate_ephemeral_resource_config_impl(
         schema.validate_config(config_cty.value)
 
         # Perform custom provider-defined validation.
-        config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class)
+        config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class, apply_defaults=True)
         resource_instance = resource_class()
         validation_errors = await resource_instance.validate(config_instance)
 

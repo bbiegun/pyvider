@@ -23,9 +23,34 @@ import attrs
 
 from pyvider.cty import CtyValue
 from pyvider.cty.conversion import cty_to_native
+from pyvider.schema.types.attribute import PvsAttribute
 from pyvider.schema.types.blocks import PvsNestedBlock
 from pyvider.schema.types.enums import NestingMode
 from pyvider.schema.types.object import PvsObjectType
+
+
+def resolves_from_configuration(attribute: PvsAttribute) -> bool:
+    """True when a null value for `attribute` means "the practitioner omitted it".
+
+    Only then is there an omission for a default to fill. Three kinds of
+    attribute are excluded, for three different reasons:
+
+    - **Required**: a default would mask a missing required attribute from the
+      required-attribute check that runs over this same value.
+    - **Write-only**: the value is never stored, so a default would put into a
+      plan what must show null.
+    - **Computed-only** (`computed=True` without `optional=True`): the
+      practitioner cannot write the attribute at all, so its null is not an
+      omission. Resolving a default into the configuration here would also make
+      the plan override it on every run -- `BaseResource._apply_schema_defaults`
+      lets a *configured* value beat prior state, so a computed-only attribute
+      would be dragged back to its default instead of retaining the value the
+      provider computed last time. Its default is still honoured, as the plan's
+      fallback when nothing computed a value.
+    """
+    if attribute.default is None or attribute.required or attribute.write_only:
+        return False
+    return bool(attribute.optional)
 
 
 def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> CtyValue | None:
@@ -33,8 +58,7 @@ def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> Cty
 
     Nulls only: an unknown attribute is one whose value is not yet known, not an
     absent one, and replacing it would plan a value Terraform is about to
-    compute. Required attributes are skipped so a default cannot mask a missing
-    one, and write-only attributes because they are never stored.
+    compute. Which attributes are eligible at all is `resolves_from_configuration`.
 
     The value is returned unchanged when nothing needed resolving, so callers
     can pass anything through this without paying for a rebuild.
@@ -48,7 +72,7 @@ def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> Cty
     changed = False
 
     for name, attribute in block.attributes.items():
-        if attribute.default is None or attribute.required or attribute.write_only:
+        if not resolves_from_configuration(attribute):
             continue
         if not _is_null(resolved.get(name)):
             continue
@@ -109,7 +133,7 @@ def _merge_block_into_plan(plan_value: Any, config_value: Any, block: PvsObjectT
     merged = dict(plan_value)
 
     for name, attribute in block.attributes.items():
-        if attribute.default is None or attribute.required or attribute.write_only:
+        if not resolves_from_configuration(attribute):
             continue
         resolved = config_values.get(name)
         # An unknown value is not yet known, not absent; a null one means the

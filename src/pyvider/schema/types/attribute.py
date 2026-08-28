@@ -150,6 +150,23 @@ class PvsAttribute:
                     f"imperatively from the resource's plan hook via {call}"
                 )
 
+        # Rule 8: An attribute with a default is Optional *and* Computed -- the
+        # practitioner may set it, and the provider fills it in otherwise.
+        # Terraform rejects a provider-supplied value on an attribute that is not
+        # computed, so a default is unusable without the flag.
+        #
+        # Deliberately narrow. Required and write-only attributes cannot be
+        # computed, and an attribute the caller declared **computed-only**
+        # (`computed=True` without `optional=True`) stays computed-only: the
+        # practitioner cannot write it, so there is no omission to resolve. Its
+        # default is the provider's own fallback, applied to the plan when
+        # nothing computed a value, and never resolved into the configuration
+        # (see `pyvider.schema.defaults`).
+        #
+        # `default=None` is indistinguishable from declaring no default; there is
+        # no way to express "defaults to null", which is what a null already is.
+
+
         # Rule 8: An attribute with a default is Computed.
         if self.default is not None and not self.required and not self.write_only:
             object.__setattr__(self, "computed", True)

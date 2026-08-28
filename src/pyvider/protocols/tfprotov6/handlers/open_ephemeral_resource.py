@@ -65,7 +65,7 @@ async def _open_ephemeral_resource_impl(
 
         schema = resource_class.get_schema()
         config_cty = unmarshal(request.config, schema=schema.block, apply_defaults=True)
-        config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class)
+        config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class, apply_defaults=True)
 
         provider_context = hub.get_component("singleton", "provider_context")
         test_mode_enabled = getattr(provider_context, "test_mode_enabled", False)

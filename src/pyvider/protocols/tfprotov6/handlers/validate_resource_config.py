@@ -80,7 +80,7 @@ async def _validate_resource_config_impl(
 
         # Try to create typed attrs instance from CTY config
         # If values are unknown/computed, this will return None (expected during planning)
-        config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class)
+        config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class, apply_defaults=True)
 
         # If config_instance is None, skip custom validation
         # Resources should use ctx.is_field_unknown() to handle unknown values properly

@@ -107,20 +107,44 @@ class TestSchemaFlags:
 
 
 class TestConfigDecoding:
+    """`from_cty(apply_defaults=True)` applies the *class* default.
+
+    This is the attrs field default declared on the config class, and it is a
+    different thing from `PvsAttribute.default` in the schema: the schema
+    default is resolved one layer earlier, into the cty value itself, so it
+    never arrives here as a null. The flag decides only what a null means, and
+    that answer differs between a configuration and state.
+    """
+
     def test_omitted_attribute_decodes_to_its_default(self) -> None:
-        config = Widget.from_cty(_config_cty(CtyValue.null(CtyString())), WidgetConfig)
+        config = Widget.from_cty(_config_cty(CtyValue.null(CtyString())), WidgetConfig, apply_defaults=True)
 
         assert config is not None
         assert config.size == DEFAULT_SIZE
 
+    def test_state_is_decoded_without_defaults(self) -> None:
+        """A null in state is a recorded absence, not an omission.
+
+        `WidgetState` declares the same class default as `WidgetConfig`, so if
+        state were decoded the way a configuration is, a null the provider
+        deliberately stored would come back as "small" and the resource would
+        read a value its own state never held.
+        """
+        state_cty = CONFIG_TYPE.validate({"name": "example", "size": CtyValue.null(CtyString()), "id": "w-1"})
+
+        state = Widget.from_cty(state_cty, WidgetState)
+
+        assert state is not None
+        assert state.size is None
+
     def test_configured_value_overrides_the_default(self) -> None:
-        config = Widget.from_cty(_config_cty("large"), WidgetConfig)
+        config = Widget.from_cty(_config_cty("large"), WidgetConfig, apply_defaults=True)
 
         assert config is not None
         assert config.size == "large"
 
     def test_unknown_value_does_not_become_the_default(self) -> None:
-        config = Widget.from_cty(_config_cty(CtyValue.unknown(CtyString())), WidgetConfig)
+        config = Widget.from_cty(_config_cty(CtyValue.unknown(CtyString())), WidgetConfig, apply_defaults=True)
 
         assert config is not None
         assert config.size is None
@@ -131,7 +155,7 @@ class TestPlanning:
     async def test_create_plan_contains_the_default(self) -> None:
         config_cty = _config_cty(CtyValue.null(CtyString()))
         ctx = ResourceContext(
-            config=Widget.from_cty(config_cty, WidgetConfig),
+            config=Widget.from_cty(config_cty, WidgetConfig, apply_defaults=True),
             state=None,
             config_cty=config_cty,
         )
@@ -145,7 +169,7 @@ class TestPlanning:
     async def test_update_plan_contains_the_default(self) -> None:
         config_cty = _config_cty(CtyValue.null(CtyString()))
         ctx = ResourceContext(
-            config=Widget.from_cty(config_cty, WidgetConfig),
+            config=Widget.from_cty(config_cty, WidgetConfig, apply_defaults=True),
             state=WidgetState(name="example", size="large", id="w-1"),
             config_cty=config_cty,
         )
@@ -159,7 +183,7 @@ class TestPlanning:
     async def test_configured_value_wins_over_the_default_in_the_plan(self) -> None:
         config_cty = _config_cty("large")
         ctx = ResourceContext(
-            config=Widget.from_cty(config_cty, WidgetConfig),
+            config=Widget.from_cty(config_cty, WidgetConfig, apply_defaults=True),
             state=None,
             config_cty=config_cty,
         )
@@ -184,7 +208,7 @@ class TestPlanning:
         )
         assert config_cty is not None
         ctx = ResourceContext(
-            config=Widget.from_cty(config_cty, WidgetConfig),
+            config=Widget.from_cty(config_cty, WidgetConfig, apply_defaults=True),
             state=WidgetState(name="example", size="large", id="w-1"),
             planned_state=WidgetState(name="example", size="large", id="w-1"),
             planned_state_cty=CONFIG_TYPE.validate({"name": "example", "size": "large", "id": "w-1"}),
@@ -200,7 +224,7 @@ class TestPlanning:
     async def test_unknown_value_stays_unknown_in_the_plan(self) -> None:
         config_cty = _config_cty(CtyValue.unknown(CtyString()))
         ctx = ResourceContext(
-            config=Widget.from_cty(config_cty, WidgetConfig),
+            config=Widget.from_cty(config_cty, WidgetConfig, apply_defaults=True),
             state=None,
             config_cty=config_cty,
         )
@@ -298,7 +322,7 @@ class TestNestedBlockDefaults:
             _gadget_cty(CtyValue.null(CtyString())), Gadget.get_schema().block
         )
         assert config_cty is not None
-        config = Gadget.from_cty(config_cty, GadgetConfig)
+        config = Gadget.from_cty(config_cty, GadgetConfig, apply_defaults=True)
 
         assert config is not None
         assert config.settings is not None
@@ -317,7 +341,7 @@ class TestNestedBlockDefaults:
             id="g-1",
         )
         ctx = ResourceContext(
-            config=Gadget.from_cty(config_cty, GadgetConfig),
+            config=Gadget.from_cty(config_cty, GadgetConfig, apply_defaults=True),
             state=prior,
             planned_state=prior,
             # Terraform's proposed new state: the block is still configured, so
@@ -343,7 +367,7 @@ class TestNestedBlockDefaults:
             id="g-1",
         )
         ctx = ResourceContext(
-            config=Gadget.from_cty(config_cty, GadgetConfig),
+            config=Gadget.from_cty(config_cty, GadgetConfig, apply_defaults=True),
             state=prior,
             planned_state=prior,
             planned_state_cty=_gadget_cty("large"),
@@ -372,7 +396,7 @@ class TestNestedBlockDefaults:
             id="g-1",
         )
         ctx = ResourceContext(
-            config=Gadget.from_cty(config_cty, GadgetConfig),
+            config=Gadget.from_cty(config_cty, GadgetConfig, apply_defaults=True),
             state=prior,
             planned_state=prior,
             planned_state_cty=_gadget_cty(CtyValue.unknown(CtyString())),
@@ -383,6 +407,93 @@ class TestNestedBlockDefaults:
 
         assert planned_state is not None
         assert planned_state["settings"]["size"] != DEFAULT_SIZE
+
+
+@attrs.define
+class TokenConfig:
+    name: str
+
+
+@attrs.define
+class TokenState:
+    name: str
+    token: str | None = None
+
+
+class Tokened(BaseResource[Any, TokenState, TokenConfig]):
+    """A resource with a computed-only attribute that declares a fallback."""
+
+    config_class = TokenConfig
+    state_class = TokenState
+
+    @classmethod
+    def get_schema(cls) -> PvsSchema:
+        return s_resource(
+            attributes={
+                "name": a_str(required=True),
+                "token": a_str(computed=True, default="unset"),
+            }
+        )
+
+    async def _validate_config(self, config: TokenConfig) -> list[str]:
+        return []
+
+    async def read(self, ctx: ResourceContext) -> TokenState | None:
+        return ctx.state
+
+    async def _delete_apply(self, ctx: ResourceContext) -> None:
+        return None
+
+
+TOKEN_TYPE = Tokened.get_schema().block.to_cty_type()
+
+
+class TestComputedOnlyDefaultInPlans:
+    """A computed-only default is a fallback, not a configured value.
+
+    The practitioner cannot write the attribute, so its default must never beat
+    a value the provider computed on an earlier run -- otherwise every plan
+    would show a spurious diff back to the default.
+    """
+
+    @pytest.mark.asyncio
+    async def test_computed_value_is_retained_over_the_default(self) -> None:
+        config_cty = resolve_schema_defaults(
+            TOKEN_TYPE.validate({"name": "example", "token": CtyValue.null(CtyString())}),
+            Tokened.get_schema().block,
+        )
+        assert config_cty is not None
+        prior = TokenState(name="example", token="computed-last-run")
+        ctx = ResourceContext(
+            config=Tokened.from_cty(config_cty, TokenConfig, apply_defaults=True),
+            state=prior,
+            planned_state=prior,
+            planned_state_cty=TOKEN_TYPE.validate({"name": "example", "token": "computed-last-run"}),
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Tokened().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["token"] == "computed-last-run"
+
+    @pytest.mark.asyncio
+    async def test_default_fills_in_when_nothing_computed_a_value(self) -> None:
+        config_cty = resolve_schema_defaults(
+            TOKEN_TYPE.validate({"name": "example", "token": CtyValue.null(CtyString())}),
+            Tokened.get_schema().block,
+        )
+        assert config_cty is not None
+        ctx = ResourceContext(
+            config=Tokened.from_cty(config_cty, TokenConfig, apply_defaults=True),
+            state=None,
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Tokened().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["token"] == "unset"
 
 
 # 🐍🏗️🔚

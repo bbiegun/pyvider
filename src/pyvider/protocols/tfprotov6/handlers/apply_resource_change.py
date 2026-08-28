@@ -176,7 +176,7 @@ def _create_resource_context(
     identity_schema: PvsSchema | None = None,
     planned_identity: pb.ResourceIdentityData | None = None,
 ) -> ResourceContext:
-    config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class)
+    config_instance = cty_to_attrs_instance(config_cty, resource_class.config_class, apply_defaults=True)
     prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
     # allow_unknown: during apply the planned state legitimately carries
     # unknowns for computed attributes the provider is about to fill in.

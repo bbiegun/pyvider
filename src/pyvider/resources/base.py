@@ -22,7 +22,7 @@ from pyvider.cty import (
 from pyvider.cty.conversion import cty_to_native
 from pyvider.resources.context import ResourceContext
 from pyvider.resources.private_state import PrivateState
-from pyvider.schema import PvsSchema, merge_nested_block_defaults
+from pyvider.schema import PvsSchema, merge_nested_block_defaults, resolves_from_configuration
 
 ResourceType = TypeVar("ResourceType")
 StateType = TypeVar("StateType")
@@ -124,13 +124,37 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         return raw_identity
 
     @classmethod
-    def from_cty(cls, cty_value: CtyValue | None, target_cls: type) -> Any | None:
+    def from_cty(
+        cls, cty_value: CtyValue | None, target_cls: type, *, apply_defaults: bool = False
+    ) -> Any | None:
+        """Decode a cty value into `target_cls`.
+
+        `apply_defaults` decides what a *null* attribute means, and it exists
+        because the two things this decodes disagree about that:
+
+        - In a **configuration**, a null attribute is one the practitioner
+          omitted. Pass True, and a field whose attrs class declares a default
+          gets it, exactly as if the keyword had been left off the constructor.
+        - In **state**, a null attribute is a recorded absence -- the provider
+          stored null and meant it. Decoding it as a default would rewrite
+          history, so the flag stays False and null decodes to None.
+
+        This is the *class* default (`size: str = "small"` on the attrs class),
+        which is a Python-level fallback and distinct from `PvsAttribute.default`
+        in the schema. The schema default is resolved one layer earlier, into the
+        cty value itself, by `unmarshal(..., apply_defaults=True)` -- so it never
+        reaches here as a null at all. The two flags share a name because they
+        answer the same question at their own layer, and every inbound
+        configuration passes True to both.
+        """
         if cty_value is None:
             return None
-        return cls._cty_to_attrs_recursive(cty_value, target_cls)
+        return cls._cty_to_attrs_recursive(cty_value, target_cls, apply_defaults=apply_defaults)
 
     @classmethod
-    def _handle_cty_value(cls, cty_value: CtyValue, target_cls: type) -> Any | None:
+    def _handle_cty_value(
+        cls, cty_value: CtyValue, target_cls: type, *, apply_defaults: bool = False
+    ) -> Any | None:
         if cty_value.is_null:
             return None
         if cty_value.is_unknown and not isinstance(cty_value.type, CtyObject | CtyList | CtySet | CtyTuple):
@@ -143,18 +167,23 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
             value_type=type(cty_value.value).__name__,
             target_cls=getattr(target_cls, "__name__", str(target_cls)),
         )
-        return cls._cty_to_attrs_recursive(cty_value.value, target_cls)
+        return cls._cty_to_attrs_recursive(cty_value.value, target_cls, apply_defaults=apply_defaults)
 
     @classmethod
-    def _handle_list_conversion(cls, data: list, target_cls: type) -> list:
+    def _handle_list_conversion(cls, data: list, target_cls: type, *, apply_defaults: bool = False) -> list:
         element_type = get_args(target_cls)[0] if get_args(target_cls) else Any
-        return [cls._cty_to_attrs_recursive(item, element_type) for item in data]
+        return [
+            cls._cty_to_attrs_recursive(item, element_type, apply_defaults=apply_defaults) for item in data
+        ]
 
     @classmethod
-    def _handle_dict_conversion(cls, data: dict, target_cls: type) -> dict:
+    def _handle_dict_conversion(cls, data: dict, target_cls: type, *, apply_defaults: bool = False) -> dict:
         args = get_args(target_cls)
         value_type = args[1] if len(args) > 1 else Any
-        return {k: cls._cty_to_attrs_recursive(v, value_type) for k, v in data.items()}
+        return {
+            k: cls._cty_to_attrs_recursive(v, value_type, apply_defaults=apply_defaults)
+            for k, v in data.items()
+        }
 
     @classmethod
     def _resolved_fields(cls, target_cls: type) -> tuple[Any, ...]:
@@ -199,7 +228,9 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         return value is None
 
     @classmethod
-    def _handle_attrs_conversion(cls, data: Any, target_cls: type) -> Any | None:
+    def _handle_attrs_conversion(
+        cls, data: Any, target_cls: type, *, apply_defaults: bool = False
+    ) -> Any | None:
         if not isinstance(data, dict):
             logger.warning(
                 "Cannot construct attrs class from non-dict data type",
@@ -217,14 +248,21 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         for name, field_def in target_fields.items():
             if name in data and field_def.init:
                 raw_value = data[name]
-                # A null value means "the practitioner omitted this attribute". The
-                # protocol has no way to send a schema default, so passing None here
-                # would override the attrs field default the resource declared.
-                # Leave the keyword out and let attrs apply it. Unknown values are
-                # NOT null, so they still come through as None and stay unknown.
-                if cls._is_null(raw_value) and field_def.default is not attrs.NOTHING:
+                # In a configuration a null attribute is one the practitioner
+                # omitted, and the protocol has no way to send a default -- so
+                # passing None here would override the fallback the resource's
+                # own attrs class declares. Leave the keyword out and let attrs
+                # apply it.
+                #
+                # Only for a configuration: `apply_defaults` is False when this
+                # decodes state, where a null is a recorded absence rather than
+                # an omission. Unknown values are not null either way, so they
+                # still come through as None and stay unknown.
+                if apply_defaults and cls._is_null(raw_value) and field_def.default is not attrs.NOTHING:
                     continue
-                converted_value = cls._cty_to_attrs_recursive(raw_value, field_def.type)
+                converted_value = cls._cty_to_attrs_recursive(
+                    raw_value, field_def.type, apply_defaults=apply_defaults
+                )
                 # Include the field even if converted_value is None
                 # This handles unknown/computed values during validation/planning
                 kwargs[name] = converted_value
@@ -272,9 +310,11 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
             ) from e
 
     @classmethod
-    def _cty_to_attrs_recursive(cls, data: Any, target_cls: type) -> Any | None:
+    def _cty_to_attrs_recursive(
+        cls, data: Any, target_cls: type, *, apply_defaults: bool = False
+    ) -> Any | None:
         if isinstance(data, CtyValue):
-            return cls._handle_cty_value(data, target_cls)
+            return cls._handle_cty_value(data, target_cls, apply_defaults=apply_defaults)
 
         if data is None or data is _UNREFINED_UNKNOWN_SENTINEL:
             return None
@@ -295,13 +335,13 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
                 origin = get_origin(target_cls)
 
         if origin in (list, list):
-            return cls._handle_list_conversion(data, target_cls)
+            return cls._handle_list_conversion(data, target_cls, apply_defaults=apply_defaults)
 
         if origin in (dict, dict):
-            return cls._handle_dict_conversion(data, target_cls)
+            return cls._handle_dict_conversion(data, target_cls, apply_defaults=apply_defaults)
 
         if attrs.has(target_cls):
-            return cls._handle_attrs_conversion(data, target_cls)
+            return cls._handle_attrs_conversion(data, target_cls, apply_defaults=apply_defaults)
 
         if isinstance(data, CtyValue):
             return cty_to_native(data)
@@ -448,6 +488,11 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
         the default", and if the plan kept a stale non-default value from state
         while `ctx.config` reported the default, the two would disagree and apply
         would fail the refinement check.
+
+        A computed-only attribute is the exception, and takes the null branch
+        below whatever its configuration holds: the practitioner cannot write it,
+        so its default is a fallback for "the provider computed nothing", never a
+        reason to discard what the provider computed last run.
         """
         for name, attribute in schema_attributes.items():
             default = getattr(attribute, "default", None)
@@ -457,7 +502,7 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
             # An unknown value is a value that is not yet known, not an absent one.
             if isinstance(config_value, CtyValue) and config_value.is_unknown:
                 continue
-            if cls._is_null(config_value):
+            if not resolves_from_configuration(attribute) or cls._is_null(config_value):
                 # No resolved configuration to follow -- fall back to the declared
                 # default, but never over a value the plan already holds.
                 if base_plan.get(name) is None:

@@ -288,6 +288,23 @@ config = a_obj({
 Attributes inside nested blocks take defaults the same way -- see
 [Defaults Inside Blocks](blocks.md#defaults-inside-blocks).
 
+Three rules govern which attributes a default applies to:
+
+- **`default=None` means "no default".** The field is typed `Any` and null is
+  its sentinel, so there is no way to declare "defaults to null" -- which is
+  what an omitted attribute already is.
+- **A default makes the attribute Optional + Computed** (see above). Required
+  and write-only attributes are untouched, since neither can be computed.
+- **A computed-only attribute keeps its default as a fallback.** Writing
+  `a_str(computed=True, default="x")` leaves the attribute computed-only: the
+  practitioner cannot set it, so `"x"` is used only when the provider computes
+  nothing, and never replaces a value it computed on an earlier run.
+
+```python
+size  = a_str(default="small")                 # optional + computed
+token = a_str(computed=True, default="unset")  # computed only, "unset" is a fallback
+```
+
 ## Validators
 
 Add validation logic to attributes:

@@ -25,6 +25,7 @@ from pyvider.schema import (
     b_single,
     merge_nested_block_defaults,
     resolve_schema_defaults,
+    resolves_from_configuration,
     s_resource,
 )
 
@@ -286,6 +287,49 @@ class TestNestedPlanMerge:
         merge_nested_block_defaults(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan == {"name": "example"}
+
+
+class TestComputedOnlyDefaults:
+    """`computed=True` without `optional=True` keeps its default out of config.
+
+    The practitioner cannot write a computed-only attribute, so its null is not
+    an omission. Resolving a default into the configuration would also make the
+    plan treat it as configured and override prior state on every run, dragging
+    the attribute back to its default instead of retaining what the provider
+    computed last time.
+    """
+
+    def test_computed_only_attribute_stays_computed_only(self) -> None:
+        attribute = a_str(computed=True, default="x")
+
+        assert attribute.computed is True
+        assert attribute.optional is False
+        assert attribute.default == "x"
+
+    def test_computed_only_default_is_not_resolved_into_configuration(self) -> None:
+        schema = s_resource(attributes={"token": a_str(computed=True, default="x")})
+        config = schema.block.to_cty_type().validate({"token": CtyValue.null(CtyString())})
+
+        resolved = resolve_schema_defaults(config, schema.block)
+
+        assert resolved.value["token"].is_null
+
+    def test_optional_and_computed_default_is_resolved(self) -> None:
+        # The flag combination `a_str(default=...)` produces on its own.
+        schema = s_resource(attributes={"size": a_str(default="small")})
+        config = schema.block.to_cty_type().validate({"size": CtyValue.null(CtyString())})
+
+        resolved = resolve_schema_defaults(config, schema.block)
+
+        assert resolved.value["size"].value == "small"
+
+    def test_explicit_none_default_is_no_default(self) -> None:
+        # `default=None` is indistinguishable from declaring no default; there is
+        # no way to spell "defaults to null", which is what a null already is.
+        attribute = a_str(default=None)
+
+        assert attribute.computed is False
+        assert resolves_from_configuration(attribute) is False
 
 
 # 🐍🏗️🔚

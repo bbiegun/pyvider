@@ -148,7 +148,13 @@ def _create_resource_context(
     # config and prior state keep the default policy: a config that is not
     # wholly known collapses to None, so a provider's custom validator is never
     # handed a half-known object (issue #5).
-    config_instance = cty_to_attrs_instance(config_cty_marked, resource_class.config_class)
+    #
+    # Only the configuration is decoded with `apply_defaults`: a null there is
+    # an attribute the practitioner omitted, whereas a null in prior state is a
+    # recorded absence that must survive the round trip unchanged.
+    config_instance = cty_to_attrs_instance(
+        config_cty_marked, resource_class.config_class, apply_defaults=True
+    )
     prior_state_instance = cty_to_attrs_instance(prior_state_cty, resource_class.state_class)
     # The proposed new state must NOT collapse. `BaseResource.plan` reads "no
     # config and no planned state" as a delete, so a config carrying an unknown

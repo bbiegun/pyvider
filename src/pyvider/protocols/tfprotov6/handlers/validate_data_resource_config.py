@@ -72,7 +72,7 @@ async def _validate_data_resource_config_impl(
         # layer's own check has to be called explicitly here.
         check_required_attributes(ds_schema.block, config_cty.value)
 
-        config_instance = cty_to_attrs_instance(config_cty, ds_class.config_class)
+        config_instance = cty_to_attrs_instance(config_cty, ds_class.config_class, apply_defaults=True)
 
         data_source_instance = ds_class()
         validation_errors = await data_source_instance.validate(config_instance)

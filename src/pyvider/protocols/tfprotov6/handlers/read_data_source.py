@@ -79,7 +79,7 @@ async def _read_data_source_impl(
 
         ds_schema = ds_class.get_schema()
         config_cty = unmarshal(request.config, schema=ds_schema.block, apply_defaults=True)
-        config_instance = cty_to_attrs_instance(config_cty, ds_class.config_class)
+        config_instance = cty_to_attrs_instance(config_cty, ds_class.config_class, apply_defaults=True)
 
         data_source = ds_class()
 

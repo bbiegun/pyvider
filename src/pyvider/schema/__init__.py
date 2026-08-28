@@ -4,7 +4,11 @@
 #
 
 
-from pyvider.schema.defaults import merge_nested_block_defaults, resolve_schema_defaults
+from pyvider.schema.defaults import (
+    merge_nested_block_defaults,
+    resolve_schema_defaults,
+    resolves_from_configuration,
+)
 from pyvider.schema.factory import (
     a_bool,
     a_dyn,
@@ -64,6 +68,7 @@ __all__ = [
     "b_single",
     "merge_nested_block_defaults",
     "resolve_schema_defaults",
+    "resolves_from_configuration",
     "s_data_source",
     "s_function",
     "s_identity",
