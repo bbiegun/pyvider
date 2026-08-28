@@ -20,7 +20,7 @@ import pytest
 from pyvider.cty import CtyObject, CtyString, CtyValue
 from pyvider.resources.base import BaseResource
 from pyvider.resources.context import ResourceContext
-from pyvider.schema import PvsSchema, a_str, resolve_schema_defaults, s_resource
+from pyvider.schema import PvsSchema, a_str, b_list, b_single, resolve_schema_defaults, s_resource
 
 DEFAULT_SIZE = "small"
 
@@ -211,6 +211,178 @@ class TestPlanning:
         planned_size = planned_state["size"]
         assert isinstance(planned_size, CtyValue)
         assert planned_size.is_unknown
+
+
+@attrs.define
+class GadgetSettings:
+    label: str | None = None
+    size: str | None = DEFAULT_SIZE
+
+
+@attrs.define
+class GadgetConfig:
+    name: str
+    settings: GadgetSettings | None = None
+    tier: list[GadgetSettings] | None = None
+
+
+@attrs.define
+class GadgetState:
+    name: str
+    settings: GadgetSettings | None = None
+    tier: list[GadgetSettings] | None = None
+    id: str | None = None
+
+
+class Gadget(BaseResource[Any, GadgetState, GadgetConfig]):
+    """A resource whose defaulted attributes live inside nested blocks."""
+
+    config_class = GadgetConfig
+    state_class = GadgetState
+
+    @classmethod
+    def get_schema(cls) -> PvsSchema:
+        return s_resource(
+            attributes={
+                "name": a_str(required=True),
+                "id": a_str(computed=True),
+            },
+            block_types=[
+                b_single(
+                    "settings",
+                    attributes={"label": a_str(), "size": a_str(default=DEFAULT_SIZE)},
+                ),
+                b_list(
+                    "tier",
+                    attributes={"label": a_str(), "size": a_str(default=DEFAULT_SIZE)},
+                ),
+            ],
+        )
+
+    async def _validate_config(self, config: GadgetConfig) -> list[str]:
+        return []
+
+    async def read(self, ctx: ResourceContext) -> GadgetState | None:
+        return ctx.state
+
+    async def _delete_apply(self, ctx: ResourceContext) -> None:
+        return None
+
+
+GADGET_TYPE = Gadget.get_schema().block.to_cty_type()
+
+
+def _gadget_cty(size: CtyValue | str) -> CtyValue:
+    return GADGET_TYPE.validate(
+        {
+            "name": "example",
+            "id": CtyValue.unknown(CtyString()),
+            "settings": {"label": "primary", "size": size},
+            "tier": [{"label": "hot", "size": size}],
+        }
+    )
+
+
+class TestNestedBlockDefaults:
+    """A default inside a nested block has to reach the plan too.
+
+    Terraform knows nothing about provider-side defaults, so an attribute the
+    practitioner omitted inside a block that already exists in prior state comes
+    back in the proposed new state carrying the *prior* value. The plan has to
+    be corrected to the resolved configuration, or apply -- which reads the
+    default from `ctx.config` -- returns a state Terraform did not plan.
+    """
+
+    def test_omitted_nested_attribute_decodes_to_its_default(self) -> None:
+        config_cty = resolve_schema_defaults(
+            _gadget_cty(CtyValue.null(CtyString())), Gadget.get_schema().block
+        )
+        assert config_cty is not None
+        config = Gadget.from_cty(config_cty, GadgetConfig)
+
+        assert config is not None
+        assert config.settings is not None
+        assert config.settings.size == DEFAULT_SIZE
+
+    @pytest.mark.asyncio
+    async def test_retained_nested_state_loses_to_the_default_on_update(self) -> None:
+        config_cty = resolve_schema_defaults(
+            _gadget_cty(CtyValue.null(CtyString())), Gadget.get_schema().block
+        )
+        assert config_cty is not None
+        prior = GadgetState(
+            name="example",
+            settings=GadgetSettings(label="primary", size="large"),
+            tier=[GadgetSettings(label="hot", size="large")],
+            id="g-1",
+        )
+        ctx = ResourceContext(
+            config=Gadget.from_cty(config_cty, GadgetConfig),
+            state=prior,
+            planned_state=prior,
+            # Terraform's proposed new state: the block is still configured, so
+            # the value it held in prior state is carried forward.
+            planned_state_cty=_gadget_cty("large"),
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Gadget().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["settings"]["size"] == DEFAULT_SIZE
+        assert planned_state["tier"][0]["size"] == DEFAULT_SIZE
+
+    @pytest.mark.asyncio
+    async def test_configured_nested_value_survives_the_merge(self) -> None:
+        config_cty = resolve_schema_defaults(_gadget_cty("large"), Gadget.get_schema().block)
+        assert config_cty is not None
+        prior = GadgetState(
+            name="example",
+            settings=GadgetSettings(label="primary", size="large"),
+            tier=[GadgetSettings(label="hot", size="large")],
+            id="g-1",
+        )
+        ctx = ResourceContext(
+            config=Gadget.from_cty(config_cty, GadgetConfig),
+            state=prior,
+            planned_state=prior,
+            planned_state_cty=_gadget_cty("large"),
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Gadget().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["settings"]["size"] == "large"
+        assert planned_state["settings"]["label"] == "primary"
+        assert planned_state["tier"][0]["size"] == "large"
+
+    @pytest.mark.asyncio
+    async def test_unknown_nested_value_does_not_become_the_default(self) -> None:
+        # An unknown value is one that is not yet known, not an omitted one, so
+        # the default must not be substituted for it -- Terraform is about to
+        # compute that value and planning "small" would contradict it.
+        config_cty = resolve_schema_defaults(
+            _gadget_cty(CtyValue.unknown(CtyString())), Gadget.get_schema().block
+        )
+        assert config_cty is not None
+        prior = GadgetState(
+            name="example",
+            settings=GadgetSettings(label="primary", size="large"),
+            id="g-1",
+        )
+        ctx = ResourceContext(
+            config=Gadget.from_cty(config_cty, GadgetConfig),
+            state=prior,
+            planned_state=prior,
+            planned_state_cty=_gadget_cty(CtyValue.unknown(CtyString())),
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Gadget().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["settings"]["size"] != DEFAULT_SIZE
 
 
 # 🐍🏗️🔚

@@ -22,7 +22,7 @@ from pyvider.cty import (
 from pyvider.cty.conversion import cty_to_native
 from pyvider.resources.context import ResourceContext
 from pyvider.resources.private_state import PrivateState
-from pyvider.schema import PvsSchema
+from pyvider.schema import PvsSchema, merge_nested_block_defaults
 
 ResourceType = TypeVar("ResourceType")
 StateType = TypeVar("StateType")
@@ -419,6 +419,12 @@ class BaseResource(ABC, Generic[ResourceType, StateType, ConfigType]):
                             base_plan[key] = value
 
                 self._apply_schema_defaults(base_plan, schema_attributes, cty_value_dict, write_only_attrs)
+                # Terraform resolves nothing about defaults, so a block that
+                # already exists in prior state comes back with the prior value
+                # for an attribute the practitioner omitted. The loop above
+                # cannot correct it: the block is already present in the plan,
+                # so the whole configured block is skipped.
+                merge_nested_block_defaults(base_plan, ctx.config_cty, schema.block)
 
     @classmethod
     def _apply_schema_defaults(
