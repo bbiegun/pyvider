@@ -50,6 +50,10 @@ def resolves_from_configuration(attribute: PvsAttribute) -> bool:
 def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> CtyValue | None:
     """Return `value` with every null attribute replaced by its schema default.
 
+    The walk is recursive: an attribute declared with `a_obj()` carries its own
+    `PvsObjectType`, and the attributes inside it take their defaults exactly as
+    top-level ones do -- as do the attributes of nested blocks, to any depth.
+
     Nulls only: an unknown attribute is one whose value is not yet known, not an
     absent one, and replacing it would plan a value Terraform is about to
     compute. Which attributes are eligible at all is `resolves_from_configuration`.
@@ -66,12 +70,11 @@ def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> Cty
     changed = False
 
     for name, attribute in block.attributes.items():
-        if not resolves_from_configuration(attribute):
-            continue
-        if not _is_null(resolved.get(name)):
-            continue
-        resolved[name] = attribute.type.validate(attribute.default)
-        changed = True
+        current = resolved.get(name)
+        replacement = _resolve_attribute(current, attribute)
+        if replacement is not current:
+            resolved[name] = replacement
+            changed = True
 
     for nested in block.block_types:
         current = resolved.get(nested.type_name)
@@ -85,6 +88,26 @@ def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> Cty
     return attrs.evolve(value, value=resolved)
 
 
+def _resolve_attribute(value: Any, attribute: PvsAttribute) -> Any:
+    """Return one attribute's value with its own default and any object members resolved."""
+    if attribute.write_only:
+        # A write-only value is never stored, so nothing inside it may be filled
+        # in either.
+        return value
+
+    resolved = value
+    if resolves_from_configuration(attribute) and _is_null(resolved):
+        resolved = attribute.type.validate(attribute.default)
+
+    if attribute.object_type is not None:
+        # An object-typed attribute is a block's structure written as a value:
+        # its members declare defaults of their own, including a default the
+        # object attribute itself just supplied but left partly unfilled.
+        resolved = resolve_schema_defaults(resolved, attribute.object_type)
+
+    return resolved
+
+
 def merge_schema_defaults_into_plan(
     plan: dict[str, Any], config: CtyValue | None, block: PvsObjectType
 ) -> None:
@@ -94,8 +117,8 @@ def merge_schema_defaults_into_plan(
     resource reads at apply time -- so the plan has to carry the same value, or
     apply returns a state Terraform did not plan. Terraform itself knows nothing
     about provider-side defaults: an attribute the practitioner omitted comes
-    back in the proposed new state carrying the *prior* value, at the top level
-    and inside nested blocks alike.
+    back in the proposed new state carrying the *prior* value, at the top level,
+    inside object-typed attributes, and inside nested blocks alike.
 
     For an attribute that declares a default the effective configuration
     therefore wins outright, prior state included. Prior state losing here is
@@ -143,13 +166,25 @@ def _merge_attribute_default(
     merged: dict[str, Any], name: str, attribute: PvsAttribute, resolved: Any
 ) -> None:
     """Correct one planned attribute against the value the configuration resolved."""
-    if attribute.default is None or attribute.write_only:
+    if attribute.write_only:
         # A write-only value is never stored, so a default would put into the
         # plan what must show null.
         return
     # An unknown value is not yet known, not absent: Terraform is about to
     # compute it, and planning the default would contradict that.
     if isinstance(resolved, CtyValue) and resolved.is_unknown:
+        return
+
+    if attribute.object_type is not None and not _is_null(resolved):
+        # An object-typed attribute is a block written as a value: its members
+        # take their defaults the same way, and only they are corrected -- the
+        # object as a whole is Terraform's proposal.
+        current = merged.get(name)
+        if isinstance(current, dict):
+            merged[name] = _merge_block_into_plan(current, resolved, attribute.object_type)
+        return
+
+    if attribute.default is None:
         return
     if not resolves_from_configuration(attribute) or _is_null(resolved):
         # No resolved configuration to follow -- fall back to the declared

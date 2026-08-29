@@ -286,7 +286,22 @@ config = a_obj({
 ```
 
 Attributes inside nested blocks take defaults the same way -- see
-[Defaults Inside Blocks](blocks.md#defaults-inside-blocks).
+[Defaults Inside Blocks](blocks.md#defaults-inside-blocks). Members of an
+`a_obj()` value do too, to any depth: writing `config = { timeout = 60 }`
+resolves to `{timeout = 60, retries = 3}`. An object the practitioner omits
+altogether stays null unless the `a_obj()` attribute declares a default of its
+own -- an absent object is not an object whose members were omitted -- and when
+it does, the members that default supplies are completed the same way. A default
+declared inside an `a_obj()` nested in a collection (`a_list(a_obj({...}))`) is
+*not* resolved: the element type is kept as a cty type, so there is no
+per-element schema left to read defaults from.
+
+This is why an `a_obj()` attribute is sent to Terraform as a *nested attribute
+type* rather than a flat object type. A flat object attribute is one opaque
+value to Terraform -- the planned value must equal the configured one exactly,
+so a member's Optional + Computed flags could never take effect and a planned
+default would be rejected with "planned value ... does not match config value".
+Nothing changes in the configuration you write.
 
 Three rules govern which attributes a default applies to:
 

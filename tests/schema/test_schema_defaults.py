@@ -15,10 +15,12 @@ inconsistency.
 import attrs
 import pytest
 
-from pyvider.cty import CtyBool, CtyString, CtyValue
+from pyvider.cty import CtyBool, CtyNumber, CtyString, CtyValue
 from pyvider.resources.base import BaseResource
 from pyvider.schema import (
     a_bool,
+    a_num,
+    a_obj,
     a_str,
     b_list,
     b_map,
@@ -288,6 +290,204 @@ class TestNestedPlanMerge:
         merge_schema_defaults_into_plan(plan, _merge_config(), MERGE_SCHEMA.block)
 
         assert plan == {"name": "example"}
+
+
+OBJECT_SCHEMA = s_resource(
+    attributes={
+        "name": a_str(required=True),
+        "config": a_obj(
+            {
+                "timeout": a_num(default=30),
+                "retries": a_num(default=3),
+                "label": a_str(),
+                "tls": a_obj({"enabled": a_bool(default=True)}),
+            }
+        ),
+        "secret": a_obj({"token": a_str(default="hunter2")}, write_only=True),
+    },
+    block_types=[b_single("options", attributes={"limits": a_obj({"max": a_num(default=5)})})],
+)
+
+OBJECT_TYPE = OBJECT_SCHEMA.block.to_cty_type()
+CONFIG_TYPE = OBJECT_SCHEMA.block.attributes["config"].type
+SECRET_TYPE = OBJECT_SCHEMA.block.attributes["secret"].type
+TLS_TYPE = OBJECT_SCHEMA.block.attributes["config"].object_type.attributes["tls"].type
+
+
+def _object_config(**overrides: object) -> CtyValue:
+    config: dict[str, object] = {
+        "timeout": CtyValue.null(CtyNumber()),
+        "retries": CtyValue.null(CtyNumber()),
+        "label": CtyValue.null(CtyString()),
+        "tls": {"enabled": CtyValue.null(CtyBool())},
+    }
+    config.update(overrides)
+    values: dict[str, object] = {
+        "name": "example",
+        "config": config,
+        "secret": {"token": CtyValue.null(CtyString())},
+        "options": {"limits": {"max": CtyValue.null(CtyNumber())}},
+    }
+    return OBJECT_TYPE.validate(values)
+
+
+class TestObjectAttributeResolution:
+    """An `a_obj()` attribute is a block written as a value.
+
+    Its members declare defaults exactly as a block's attributes do, so the
+    resolution walk has to descend into `PvsAttribute.object_type` too --
+    otherwise the documented `a_obj({"timeout": a_num(default=30)})` example
+    leaves the practitioner with a null.
+    """
+
+    def test_omitted_object_member_takes_the_schema_default(self) -> None:
+        resolved = resolve_schema_defaults(_object_config(), OBJECT_SCHEMA.block)
+
+        assert resolved.value["config"].value["timeout"].value == 30
+        assert resolved.value["config"].value["retries"].value == 3
+
+    def test_configured_object_member_is_left_alone(self) -> None:
+        resolved = resolve_schema_defaults(_object_config(timeout=60), OBJECT_SCHEMA.block)
+
+        assert resolved.value["config"].value["timeout"].value == 60
+
+    def test_unknown_object_member_is_left_unknown(self) -> None:
+        resolved = resolve_schema_defaults(
+            _object_config(timeout=CtyValue.unknown(CtyNumber())), OBJECT_SCHEMA.block
+        )
+
+        assert resolved.value["config"].value["timeout"].is_unknown
+
+    def test_object_member_without_a_default_stays_null(self) -> None:
+        resolved = resolve_schema_defaults(_object_config(), OBJECT_SCHEMA.block)
+
+        assert resolved.value["config"].value["label"].is_null
+
+    def test_objects_nested_inside_objects_are_resolved(self) -> None:
+        resolved = resolve_schema_defaults(_object_config(), OBJECT_SCHEMA.block)
+
+        assert resolved.value["config"].value["tls"].value["enabled"].value is True
+
+    def test_object_inside_a_nested_block_is_resolved(self) -> None:
+        resolved = resolve_schema_defaults(_object_config(), OBJECT_SCHEMA.block)
+
+        assert resolved.value["options"].value["limits"].value["max"].value == 5
+
+    def test_write_only_object_is_not_filled(self) -> None:
+        # A write-only value is never stored, so nothing inside it may be
+        # filled in either.
+        resolved = resolve_schema_defaults(_object_config(), OBJECT_SCHEMA.block)
+
+        assert resolved.value["secret"].value["token"].is_null
+
+    def test_null_object_is_not_invented(self) -> None:
+        # The attribute itself declares no default, and an absent object is not
+        # an object whose members were omitted.
+        config = OBJECT_TYPE.validate(
+            {
+                "name": "example",
+                "config": CtyValue.null(CONFIG_TYPE),
+                "secret": CtyValue.null(SECRET_TYPE),
+                "options": {"limits": {"max": CtyValue.null(CtyNumber())}},
+            }
+        )
+
+        resolved = resolve_schema_defaults(config, OBJECT_SCHEMA.block)
+
+        assert resolved.value["config"].is_null
+
+    def test_object_default_is_completed_by_its_members(self) -> None:
+        # The object attribute's own default supplies the object; the members it
+        # leaves null are then resolved like any other.
+        schema = s_resource(
+            attributes={
+                "config": a_obj(
+                    {"timeout": a_num(default=30), "retries": a_num(default=3)},
+                    default={"timeout": 60, "retries": None},
+                )
+            }
+        )
+        config = schema.block.to_cty_type().validate(
+            {"config": CtyValue.null(schema.block.attributes["config"].type)}
+        )
+
+        resolved = resolve_schema_defaults(config, schema.block)
+
+        assert resolved.value["config"].value["timeout"].value == 60
+        assert resolved.value["config"].value["retries"].value == 3
+
+
+class TestObjectPlanMerge:
+    """A plan that retained a prior object member is corrected too.
+
+    Terraform's proposed new state carries the prior value of an omitted object
+    member forward, just as it does for a nested block's attribute, so the plan
+    merge has to descend into `object_type` as well.
+    """
+
+    def _resolved_config(self, **overrides: object) -> CtyValue:
+        resolved = resolve_schema_defaults(_object_config(**overrides), OBJECT_SCHEMA.block)
+        assert resolved is not None
+        return resolved
+
+    def test_retained_object_member_is_corrected(self) -> None:
+        plan = {"config": {"timeout": 60, "retries": 3, "label": "primary", "tls": {"enabled": True}}}
+
+        merge_schema_defaults_into_plan(plan, self._resolved_config(), OBJECT_SCHEMA.block)
+
+        assert plan["config"]["timeout"] == 30
+
+    def test_member_without_a_default_keeps_the_proposed_value(self) -> None:
+        plan = {"config": {"timeout": 30, "retries": 3, "label": "stale", "tls": {"enabled": True}}}
+
+        merge_schema_defaults_into_plan(plan, self._resolved_config(), OBJECT_SCHEMA.block)
+
+        assert plan["config"]["label"] == "stale"
+
+    def test_objects_nested_inside_objects_are_corrected(self) -> None:
+        plan = {"config": {"timeout": 30, "retries": 3, "label": None, "tls": {"enabled": False}}}
+
+        merge_schema_defaults_into_plan(plan, self._resolved_config(), OBJECT_SCHEMA.block)
+
+        assert plan["config"]["tls"]["enabled"] is True
+
+    def test_object_inside_a_nested_block_is_corrected(self) -> None:
+        plan = {"options": {"limits": {"max": 99}}}
+
+        merge_schema_defaults_into_plan(plan, self._resolved_config(), OBJECT_SCHEMA.block)
+
+        assert plan["options"]["limits"]["max"] == 5
+
+    def test_unknown_member_leaves_the_plan_alone(self) -> None:
+        config = self._resolved_config(timeout=CtyValue.unknown(CtyNumber()))
+        plan = {"config": {"timeout": 60, "retries": 3, "label": None, "tls": {"enabled": True}}}
+
+        merge_schema_defaults_into_plan(plan, config, OBJECT_SCHEMA.block)
+
+        assert plan["config"]["timeout"] == 60
+
+    def test_write_only_object_is_not_filled(self) -> None:
+        plan = {"secret": None}
+
+        merge_schema_defaults_into_plan(plan, self._resolved_config(), OBJECT_SCHEMA.block)
+
+        assert plan["secret"] is None
+
+    def test_object_absent_from_the_plan_is_not_invented(self) -> None:
+        plan: dict[str, object] = {"name": "example"}
+
+        merge_schema_defaults_into_plan(plan, self._resolved_config(), OBJECT_SCHEMA.block)
+
+        assert plan == {"name": "example"}
+
+    def test_null_object_in_the_plan_is_left_alone(self) -> None:
+        # There is no object to correct members inside, and the attribute
+        # declares no default of its own to fall back on.
+        plan: dict[str, object] = {"config": None}
+
+        merge_schema_defaults_into_plan(plan, self._resolved_config(), OBJECT_SCHEMA.block)
+
+        assert plan["config"] is None
 
 
 class TestComputedOnlyDefaults:

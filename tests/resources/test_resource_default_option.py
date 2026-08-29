@@ -20,7 +20,7 @@ import pytest
 from pyvider.cty import CtyObject, CtyString, CtyValue
 from pyvider.resources.base import BaseResource
 from pyvider.resources.context import ResourceContext
-from pyvider.schema import PvsSchema, a_str, b_list, b_single, resolve_schema_defaults, s_resource
+from pyvider.schema import PvsSchema, a_obj, a_str, b_list, b_single, resolve_schema_defaults, s_resource
 
 DEFAULT_SIZE = "small"
 
@@ -407,6 +407,119 @@ class TestNestedBlockDefaults:
 
         assert planned_state is not None
         assert planned_state["settings"]["size"] != DEFAULT_SIZE
+
+
+@attrs.define
+class DialSettings:
+    label: str | None = None
+    size: str | None = None
+
+
+@attrs.define
+class DialConfig:
+    name: str
+    config: DialSettings | None = None
+
+
+@attrs.define
+class DialState:
+    name: str
+    config: DialSettings | None = None
+    id: str | None = None
+
+
+class Dial(BaseResource[Any, DialState, DialConfig]):
+    """A resource whose defaulted attribute lives inside an `a_obj()` value."""
+
+    config_class = DialConfig
+    state_class = DialState
+
+    @classmethod
+    def get_schema(cls) -> PvsSchema:
+        return s_resource(
+            attributes={
+                "name": a_str(required=True),
+                "config": a_obj({"label": a_str(), "size": a_str(default=DEFAULT_SIZE)}),
+                "id": a_str(computed=True),
+            }
+        )
+
+    async def _validate_config(self, config: DialConfig) -> list[str]:
+        return []
+
+    async def read(self, ctx: ResourceContext) -> DialState | None:
+        return ctx.state
+
+    async def _delete_apply(self, ctx: ResourceContext) -> None:
+        return None
+
+
+DIAL_TYPE = Dial.get_schema().block.to_cty_type()
+
+
+def _dial_cty(size: CtyValue | str) -> CtyValue:
+    return DIAL_TYPE.validate(
+        {
+            "name": "example",
+            "id": CtyValue.unknown(CtyString()),
+            "config": {"label": "primary", "size": size},
+        }
+    )
+
+
+class TestObjectAttributeDefaults:
+    """A default inside `a_obj()` has to behave like one inside a block.
+
+    An object-typed attribute is a block written as a value, so its members
+    declare defaults the same way -- and both the configuration decode and the
+    plan have to carry them, or apply returns a state Terraform did not plan.
+    """
+
+    def test_omitted_object_member_decodes_to_its_default(self) -> None:
+        config_cty = resolve_schema_defaults(_dial_cty(CtyValue.null(CtyString())), Dial.get_schema().block)
+        assert config_cty is not None
+        config = Dial.from_cty(config_cty, DialConfig, apply_defaults=True)
+
+        assert config is not None
+        assert config.config is not None
+        assert config.config.size == DEFAULT_SIZE
+
+    @pytest.mark.asyncio
+    async def test_retained_object_member_loses_to_the_default_on_update(self) -> None:
+        config_cty = resolve_schema_defaults(_dial_cty(CtyValue.null(CtyString())), Dial.get_schema().block)
+        assert config_cty is not None
+        prior = DialState(name="example", config=DialSettings(label="primary", size="large"), id="d-1")
+        ctx = ResourceContext(
+            config=Dial.from_cty(config_cty, DialConfig, apply_defaults=True),
+            state=prior,
+            planned_state=prior,
+            planned_state_cty=_dial_cty("large"),
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Dial().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["config"]["size"] == DEFAULT_SIZE
+        assert planned_state["config"]["label"] == "primary"
+
+    @pytest.mark.asyncio
+    async def test_configured_object_member_survives_the_merge(self) -> None:
+        config_cty = resolve_schema_defaults(_dial_cty("large"), Dial.get_schema().block)
+        assert config_cty is not None
+        prior = DialState(name="example", config=DialSettings(label="primary", size="large"), id="d-1")
+        ctx = ResourceContext(
+            config=Dial.from_cty(config_cty, DialConfig, apply_defaults=True),
+            state=prior,
+            planned_state=prior,
+            planned_state_cty=_dial_cty("large"),
+            config_cty=config_cty,
+        )
+
+        planned_state, _ = await Dial().plan(ctx)
+
+        assert planned_state is not None
+        assert planned_state["config"]["size"] == "large"
 
 
 @attrs.define
