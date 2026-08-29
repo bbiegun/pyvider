@@ -40,6 +40,13 @@ class PvsAttribute:
         - Computed
         This hook enforces that logic.
         """
+        is_req, is_opt, is_comp = self._normalize_flags()
+        self._validate_flag_combinations(is_req, is_opt, is_comp)
+        self._validate_requires_replace()
+        self._apply_default_rules(is_req, is_opt, is_comp)
+
+    def _normalize_flags(self) -> tuple[bool, bool, bool]:
+        """Applies the Required/Optional/Computed defaulting rules."""
         # Use object.__setattr__ because the instance is frozen.
         is_req = self.required
         is_opt = self.optional
@@ -54,6 +61,10 @@ class PvsAttribute:
         if is_req and is_opt:
             object.__setattr__(self, "optional", False)
 
+        return is_req, is_opt, is_comp
+
+    def _validate_flag_combinations(self, is_req: bool, is_opt: bool, is_comp: bool) -> None:
+        """Rejects Required/Optional/Computed combinations Terraform cannot express."""
         # Rule 3: An attribute can't be both Required and Computed.
         if is_req and is_comp:
             raise ValueError(
@@ -80,6 +91,8 @@ class PvsAttribute:
                 f"Current configuration: required={self.required}, optional={self.optional}, computed={self.computed}"
             )
 
+    def _validate_requires_replace(self) -> None:
+        """Rejects requires_replace placements that could never take effect."""
         # Rule 5: requires_replace is meaningless on a computed-only attribute.
         if self.requires_replace and self.computed and not self.required and not self.optional:
             raise ValueError(
@@ -149,6 +162,78 @@ class PvsAttribute:
                     f"to the object should force replacement, or trigger replacement "
                     f"imperatively from the resource's plan hook via {call}"
                 )
+
+    def _apply_default_rules(self, is_req: bool, is_opt: bool, is_comp: bool) -> None:
+        """Validates and normalizes the interaction between `default` and the flags."""
+        if self.default is None:
+            return
+
+        rules = (
+            (
+                is_comp and not is_opt and not is_req,
+                "A computed-only attribute cannot declare a default.",
+                "Defaults fill omitted configuration, but a computed-only attribute cannot be configured.",
+                (
+                    "optional=True, default=...: Allow configuration and default it when omitted",
+                    "computed=True, no default: Calculate the fallback in create/read logic",
+                ),
+            ),
+            (
+                is_req,
+                "A required attribute cannot declare a default.",
+                "A required attribute cannot be omitted, so its default would be unreachable.",
+                (
+                    "optional=True, default=...: Allow omission and supply the default",
+                    "required=True, no default: Require the practitioner to supply a value",
+                ),
+            ),
+            (
+                self.write_only,
+                "A write-only attribute cannot declare a default.",
+                "Terraform requires write-only values to remain null in prior and planned state.",
+                (
+                    "write_only=True, no default: Apply the fallback in create/update logic",
+                    "default=..., write_only=False: Default and store the value in state",
+                ),
+            ),
+        )
+        for condition, headline, why, options in rules:
+            if condition:
+                self._reject_default(headline, why, options)
+
+        # Rule 11: An attribute with a default is Optional *and* Computed -- the
+        # practitioner may set it, and the provider fills it in otherwise.
+        # Terraform rejects a provider-supplied value on an attribute that is not
+        # computed, so a default is unusable without the flag.
+        #
+        # `default=None` is indistinguishable from declaring no default; there is
+        # no way to express "defaults to null", which is what a null already is.
+        try:
+            self.type.validate(self.default)
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid schema attribute configuration for '{self.name}': "
+                f"the declared default {self.default!r} is not a valid "
+                f"{type(self.type).__name__} value.\n\n"
+                f"Underlying error: {exc}\n\n"
+                f"Suggestion: give the default the same type as the attribute."
+            ) from exc
+        object.__setattr__(self, "computed", True)
+
+    def _reject_default(
+        self,
+        headline: str,
+        why: str,
+        options: tuple[str, str],
+    ) -> None:
+        suggestions = "\n".join(f"  - {option}" for option in options)
+        raise ValueError(
+            f"Invalid schema attribute configuration for '{self.name}': {headline}\n\n"
+            f"{why}\n\n"
+            f"Suggestion: Choose one of the following:\n{suggestions}\n\n"
+            f"Current configuration: required={self.required}, optional={self.optional}, "
+            f"computed={self.computed}, write_only={self.write_only}, default={self.default!r}"
+        )
 
 
 # 🐍🏗️🔚

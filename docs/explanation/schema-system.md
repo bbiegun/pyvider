@@ -69,6 +69,48 @@ These factories create type-safe schema definitions that Pyvider automatically c
 }
 ```
 
+### Defaults
+
+`default=` supplies the value the framework uses when a configuration omits the argument.
+The Terraform protocol has no field for a default, so Pyvider substitutes it itself: the
+decoded configuration a resource reads and the state it plans both carry the value, and
+the plan and the apply result therefore agree.
+
+```python
+{
+    "size": a_str(default="small"),                         # top-level attribute
+    "settings": a_obj({"tier": a_str(default="basic")}),    # inside an object attribute
+}
+# ...and inside a nested block:
+b_list("rule", attributes={"action": a_str(default="allow")})
+```
+
+Four things follow from how Terraform validates plans, and are worth knowing:
+
+- An attribute with a default is advertised as **Computed** automatically. Terraform only
+  allows a provider to plan a value the configuration does not contain for a computed
+  attribute. `required=True`, `write_only=True` and computed-only attributes are rejected
+  with a default, as is a default whose type does not match the attribute.
+- Defaults fill values inside the objects and block elements the configuration
+  *contains*. An object attribute or a block the practitioner did not write stays absent;
+  materialising one would add configuration that was never requested.
+- Every direct `a_obj()` attribute is sent to Terraform as a **nested type**, whether or
+  not the object or its members declare defaults. Terraform therefore sees each member's
+  required/optional/computed flags. Compared with the former opaque `cty.Object`
+  encoding, members marked optional can be omitted individually instead of every member
+  having to appear in configuration. The configuration syntax and resulting cty object
+  shape are unchanged.
+- A value that is not yet known ("known after apply") is never replaced by a default.
+
+Deleting an argument reverts it to its default rather than keeping the value the resource
+last had. That is what terraform-plugin-framework does with a declared `Default`: Terraform
+Core builds the proposed new state by falling back to prior state for an Optional +
+Computed attribute, and the framework's default then overwrites it, keying on
+*configuration* nullness rather than plan nullness. Inside a **set** block this is the one
+exception: a set has no stable element order, so an element cannot be matched to the
+configuration that produced it, and a removed argument keeps the value it had instead of
+reverting.
+
 ### Type Mapping
 
 Pyvider automatically maps Python types to Terraform types:

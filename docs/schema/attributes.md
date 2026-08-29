@@ -267,6 +267,34 @@ config = a_obj({
 }, description="Configuration with defaults")
 ```
 
+A default is the value the framework substitutes when the practitioner omits the
+argument. It reaches the configuration the resource reads and the state it plans, so
+the plan shows `"us-east-1"` rather than nothing at all.
+
+Five things follow:
+
+- **An attribute with a default is Computed.** Pyvider marks it so automatically.
+  Terraform only lets a provider plan a value the configuration does not contain for a
+  computed attribute; `required=True`, `write_only=True` and computed-only attributes are
+  rejected with a default, as is a default whose type does not match the attribute.
+- **Removing the argument reverts it to the default** rather than keeping the value it
+  last had. This matches terraform-plugin-framework: Terraform Core builds the proposed
+  new state by falling back to prior state for an Optional + Computed attribute, and the
+  framework's `Default` then overwrites that, keying on configuration nullness rather
+  than plan nullness. (Inside a `b_set` block the value is kept instead: a set has no
+  element order, so an element cannot be matched back to the configuration that produced
+  it.)
+- **`default=None` means "no default".** There is no way to declare an explicit null
+  default, and none is needed: an optional attribute is already null when omitted.
+- **Nothing absent is invented.** A default nested inside an object attribute or a block
+  is filled only when the practitioner wrote that object or block; a value that is not
+  yet known ("known after apply") is never replaced.
+- **Every direct `a_obj()` is a nested type.** This applies whether or not the object or
+  its members declare defaults, and exposes each member's required/optional/computed flags
+  to Terraform. Compared with the former opaque `cty.Object` encoding, members marked
+  optional can be omitted individually instead of every member having to appear in
+  configuration. The configuration syntax and resulting cty object shape are unchanged.
+
 ## Validators
 
 Add validation logic to attributes:
