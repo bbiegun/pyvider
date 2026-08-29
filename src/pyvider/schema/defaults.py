@@ -43,6 +43,53 @@ def resolves_from_configuration(attribute: PvsAttribute) -> bool:
     return attribute.default is not None
 
 
+# SINGLE and GROUP carry one block directly; every other mode carries a
+# collection of them. Both walks below branch on this same distinction.
+_SINGLE_BLOCK_NESTINGS = (NestingMode.SINGLE, NestingMode.GROUP)
+
+
+def _known_config(value: Any) -> CtyValue | None:
+    """The configuration to read defaults from, or None when there is none.
+
+    A null value was never written and an unknown one is not yet decided.
+    """
+    if isinstance(value, CtyValue) and not value.is_null and not value.is_unknown:
+        return value
+    return None
+
+
+def _block_members(value: Any) -> Mapping[str, Any] | None:
+    """The attribute-name-to-value mapping behind a configured block, or None."""
+    config = _known_config(value)
+    if config is None or not isinstance(config.value, Mapping):
+        return None
+    return config.value
+
+
+def _nested_elements(
+    target: Any, config: CtyValue, nested: PvsNestedBlock
+) -> list[tuple[Any, Any, Any]] | None:
+    """Pair every element of a collection-nested block with the configuration it came from.
+
+    Returns `(key, element, config_element)` triples -- `key` being a map key or
+    a list position -- or None when the two cannot be paired, which leaves the
+    caller's value untouched. The only place that knows which nesting modes are
+    keyed and which are ordered.
+    """
+    if nested.nesting is NestingMode.MAP:
+        if not isinstance(target, Mapping) or not isinstance(config.value, Mapping):
+            return None
+        return [(key, element, config.value.get(key)) for key, element in target.items()]
+
+    # LIST and SET are both carried as an ordered collection of elements.
+    if not isinstance(target, list | tuple) or not isinstance(config.value, tuple):
+        return None
+    if len(target) != len(config.value):
+        # Nothing pairs an element up with its configuration once counts differ.
+        return None
+    return [(index, element, config.value[index]) for index, element in enumerate(target)]
+
+
 def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> CtyValue | None:
     """Return `value` with every null attribute replaced by its schema default.
 
@@ -57,12 +104,13 @@ def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> Cty
     The value is returned unchanged when nothing needed resolving, so callers
     can pass anything through this without paying for a rebuild.
     """
-    if not isinstance(value, CtyValue) or value.is_null or value.is_unknown:
+    if not isinstance(value, CtyValue):
         return value
-    if not isinstance(value.value, Mapping):
+    members = _block_members(value)
+    if members is None:
         return value
 
-    resolved = dict(value.value)
+    resolved = dict(members)
     changed = False
 
     for name, attribute in block.attributes.items():
@@ -135,25 +183,21 @@ def merge_schema_defaults_into_plan(
 
 def _merge_block_into_plan(plan_value: Any, config_value: Any, block: PvsObjectType) -> Any:
     """Return one planned block value -- root object included -- with its defaults corrected."""
-    if not isinstance(plan_value, dict):
-        # An absent or not-yet-known block has nothing to merge into.
-        return plan_value
-    if not isinstance(config_value, CtyValue) or config_value.is_null or config_value.is_unknown:
-        return plan_value
-    if not isinstance(config_value.value, Mapping):
+    members = _block_members(config_value)
+    if not isinstance(plan_value, dict) or members is None:
+        # An absent or not-yet-known block on either side has nothing to merge.
         return plan_value
 
-    config_values = config_value.value
     merged = dict(plan_value)
 
     for name, attribute in block.attributes.items():
-        _merge_attribute_default(merged, name, attribute, config_values.get(name))
+        _merge_attribute_default(merged, name, attribute, members.get(name))
 
     for nested in block.block_types:
         if nested.type_name not in merged:
             continue
         merged[nested.type_name] = _merge_nested_into_plan(
-            merged[nested.type_name], config_values.get(nested.type_name), nested
+            merged[nested.type_name], members.get(nested.type_name), nested
         )
 
     return merged
@@ -195,37 +239,27 @@ def _merge_attribute_default(
 
 def _merge_nested_into_plan(plan_value: Any, config_value: Any, nested: PvsNestedBlock) -> Any:
     """Correct the defaults in a planned nested block, whatever its nesting mode."""
-    if not isinstance(config_value, CtyValue) or config_value.is_null or config_value.is_unknown:
+    config = _known_config(config_value)
+    if config is None:
         return plan_value
 
-    if nested.nesting in (NestingMode.SINGLE, NestingMode.GROUP):
-        return _merge_block_into_plan(plan_value, config_value, nested.block)
+    if nested.nesting in _SINGLE_BLOCK_NESTINGS:
+        return _merge_block_into_plan(plan_value, config, nested.block)
 
-    if nested.nesting is NestingMode.MAP:
-        if not isinstance(plan_value, Mapping) or not isinstance(config_value.value, Mapping):
-            return plan_value
-        return {
-            key: _merge_block_into_plan(element, config_value.value.get(key), nested.block)
-            for key, element in plan_value.items()
-        }
-
-    # LIST and SET are both carried as an ordered collection of elements.
-    if not isinstance(plan_value, list | tuple) or not isinstance(config_value.value, tuple):
+    pairs = _nested_elements(plan_value, config, nested)
+    if pairs is None:
         return plan_value
-    if len(plan_value) != len(config_value.value):
-        # Nothing pairs an element up with the configuration it came from once
-        # the counts differ, so Terraform's proposal is left alone.
-        return plan_value
-    if nested.nesting is NestingMode.SET and len(plan_value) > 1:
+    if nested.nesting is NestingMode.SET and len(pairs) > 1:
         # Set elements have no stable order to pair on -- a default that differs
         # from prior state is itself what reorders them -- so only the
         # unambiguous single-element case is merged.
         return plan_value
 
     merged = [
-        _merge_block_into_plan(element, config_element, nested.block)
-        for element, config_element in zip(plan_value, config_value.value, strict=True)
+        _merge_block_into_plan(element, config_element, nested.block) for _, element, config_element in pairs
     ]
+    if nested.nesting is NestingMode.MAP:
+        return {key: block for (key, _, _), block in zip(pairs, merged, strict=True)}
     return merged if isinstance(plan_value, list) else tuple(merged)
 
 
@@ -237,27 +271,27 @@ def _is_null(value: Any) -> bool:
 
 def _resolve_nested(value: Any, nested: PvsNestedBlock) -> Any:
     """Resolve defaults inside a nested block, whatever its nesting mode."""
-    if not isinstance(value, CtyValue) or value.is_null or value.is_unknown:
+    config = _known_config(value)
+    if config is None:
         return value
 
-    if nested.nesting in (NestingMode.SINGLE, NestingMode.GROUP):
-        return resolve_schema_defaults(value, nested.block)
+    if nested.nesting in _SINGLE_BLOCK_NESTINGS:
+        return resolve_schema_defaults(config, nested.block)
 
+    # Every element is its own block, and here the configuration is what is
+    # being walked, so each element pairs with itself.
+    pairs = _nested_elements(config.value, config, nested)
+    if pairs is None:
+        return value
+
+    resolved = [resolve_schema_defaults(element, nested.block) for _, element, _ in pairs]
+    if all(new is old for new, (_, old, _) in zip(resolved, pairs, strict=True)):
+        return value
     if nested.nesting is NestingMode.MAP:
-        if not isinstance(value.value, Mapping):
-            return value
-        mapped = {k: resolve_schema_defaults(v, nested.block) for k, v in value.value.items()}
-        if all(mapped[k] is v for k, v in value.value.items()):
-            return value
-        return attrs.evolve(value, value=mapped)
-
-    # LIST and SET are both carried as a tuple of element values.
-    if not isinstance(value.value, tuple):
-        return value
-    elements = tuple(resolve_schema_defaults(element, nested.block) for element in value.value)
-    if all(new is old for new, old in zip(elements, value.value, strict=True)):
-        return value
-    return attrs.evolve(value, value=elements)
+        return attrs.evolve(
+            value, value={key: block for (key, _, _), block in zip(pairs, resolved, strict=True)}
+        )
+    return attrs.evolve(value, value=tuple(resolved))
 
 
 # 🐍🏗️🔚
