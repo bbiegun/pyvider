@@ -291,7 +291,7 @@ rule {
 
 **Optional + Computed**: User may provide OR provider will compute:
 ```python
-"timestamp": a_str(computed=True)  # Provider sets if not provided
+"timestamp": a_str(optional=True, computed=True)  # Provider sets if not provided
 ```
 
 ### Sensitive Data
