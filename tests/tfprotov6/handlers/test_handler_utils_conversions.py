@@ -6,8 +6,9 @@
 """Tests for handlers/utils.py utility functions."""
 
 import attrs
+import pytest
 
-from pyvider.cty import CtyList, CtyNumber, CtyObject, CtySet, CtyString
+from pyvider.cty import CtyList, CtyMap, CtyNumber, CtyObject, CtySet, CtyString
 from pyvider.cty.path import CtyPath, GetAttrStep, IndexStep, KeyStep
 from pyvider.cty.values import CtyValue
 from pyvider.cty.values.markers import UNREFINED_UNKNOWN
@@ -287,6 +288,66 @@ class TestStrPathToProtoPath:
         """Test that empty path returns None."""
         assert str_path_to_proto_path("") is None
         assert str_path_to_proto_path(None) is None
+
+    def test_attribute_name_containing_a_dash_stays_one_step(self) -> None:
+        """go-cty allows a dash in an attribute name; the old `\\w+` regex did not.
+
+        It matched either side of the dash separately, so a single attribute
+        became a two-step path naming two attributes that do not exist.
+        """
+        result = str_path_to_proto_path("retention-days")
+
+        assert [step.attribute_name for step in result.steps] == ["retention-days"]
+
+    def test_nested_attribute_name_containing_a_dash(self) -> None:
+        result = str_path_to_proto_path("config.retention-days")
+
+        assert [step.attribute_name for step in result.steps] == ["config", "retention-days"]
+
+    def test_within_resolves_a_bracket_by_what_the_type_accepts(self) -> None:
+        """`['a']` is both a set element and a map key; only the type can say which."""
+        within = CtyObject(
+            {
+                "items": CtyList(element_type=CtyString()),
+                "meta": CtyMap(element_type=CtyString()),
+            }
+        )
+
+        indexed = str_path_to_proto_path("items[0]", within=within)
+        keyed = str_path_to_proto_path("meta['k']", within=within)
+
+        assert indexed.steps[1].element_key_int == 0
+        assert keyed.steps[1].element_key_string == "k"
+
+    @pytest.mark.parametrize(
+        "unresolvable",
+        ["nope", "items['a']", "name.deeper"],
+    )
+    def test_within_drops_a_path_the_type_cannot_answer(self, unresolvable: str) -> None:
+        """A misspelt attribute, a list keyed by string, a scalar descended into."""
+        within = CtyObject({"name": CtyString(), "items": CtyList(element_type=CtyString())})
+
+        assert str_path_to_proto_path(unresolvable, within=within) is None
+
+    def test_without_within_an_unknown_attribute_is_still_accepted(self) -> None:
+        """Only the syntax is checked when there is no type to resolve against."""
+        result = str_path_to_proto_path("nope")
+
+        assert [step.attribute_name for step in result.steps] == ["nope"]
+
+    @pytest.mark.parametrize(
+        "malformed",
+        ["tags[0", "tags[]", "tags['a", "items[0]extra"],
+    )
+    def test_a_malformed_path_yields_no_path_rather_than_a_wrong_one(self, malformed: str) -> None:
+        """A path that cannot be read points at nothing, not at the wrong attribute.
+
+        The old regex used `finditer`, which skips what it cannot match, so
+        `tags[0` silently became `tags[0]`-looking steps and `items[0]extra`
+        grew a third step. A diagnostic aimed at the wrong attribute is worse
+        than one aimed at nothing.
+        """
+        assert str_path_to_proto_path(malformed) is None
 
 
 class TestCtyPathToProtoPath:
