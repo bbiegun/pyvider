@@ -308,19 +308,23 @@ Three rules govern which attributes a default applies to:
 - **`default=None` means "no default".** The field is typed `Any` and null is
   its sentinel, so there is no way to declare "defaults to null" -- which is
   what an omitted attribute already is.
-- **A default makes the attribute Optional + Computed** (see above). Required
-  and write-only attributes are untouched, since neither can be computed.
-- **A computed-only attribute cannot declare a default**, and the schema refuses
-  it. A default is the value used when the practitioner omits something they
-  could have written; `computed=True` without `optional=True` means they cannot
-  write it at all, so there is nothing to default from. Put the provider's
-  fallback in the resource's own create/read logic instead.
+- **A default makes the attribute Optional + Computed** (see above).
+- **A default is refused where it could not apply**, rather than being accepted
+  and silently ignored. The schema rejects it on a computed-only attribute (the
+  practitioner cannot write it at all, so there is nothing to default from), on
+  a required attribute (the practitioner can never omit it, so the default could
+  never be reached and would mask a missing value), and on a write-only
+  attribute (Terraform requires the value to be null in prior and planned state,
+  and a write-only attribute cannot be computed). In every case, put the
+  provider's fallback in the resource's own create/update logic instead.
 
 ```python
 size  = a_str(default="small")   # optional + computed -- the practitioner may set it
 token = a_str(computed=True)     # the provider's alone; its fallback lives in _create()
 
-a_str(computed=True, default="unset")   # ValueError: computed-only cannot declare a default
+a_str(computed=True, default="unset")            # ValueError: computed-only cannot declare a default
+a_str(required=True, default="unset")            # ValueError: required cannot declare a default
+a_str(write_only=True, default="unset")          # ValueError: write-only cannot declare a default
 ```
 
 ## Validators

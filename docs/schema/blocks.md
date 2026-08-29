@@ -214,11 +214,11 @@ Pyvider overrides it with the resolved default, so the plan shows
 
 Two rules limit the override:
 
-- Only attributes that **declare a default** are overridden, and only where a
-  null means "omitted" -- so required and write-only attributes are left alone
-  (and a computed-only attribute cannot declare a default at all). Everything
-  else in the proposed new state is Terraform's own merge of configuration and
-  prior state and is left untouched.
+- Only attributes that **declare a default** are overridden. A default cannot be
+  declared where it could not apply -- the schema refuses one on a required,
+  write-only or computed-only attribute -- so declaring a default is enough to
+  say a null means "omitted". Everything else in the proposed new state is
+  Terraform's own merge of configuration and prior state and is left untouched.
 - An **unknown** value is not an omitted one. A block attribute whose value
   depends on something Terraform has not computed yet keeps its unknown and is
   never replaced by the default.

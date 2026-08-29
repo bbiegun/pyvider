@@ -32,19 +32,15 @@ from pyvider.schema.types.object import PvsObjectType
 def resolves_from_configuration(attribute: PvsAttribute) -> bool:
     """True when a null value for `attribute` means "the practitioner omitted it".
 
-    Only then is there an omission for a default to fill. Two kinds of attribute
-    are excluded, for two different reasons:
-
-    - **Required**: a default would mask a missing required attribute from the
-      required-attribute check that runs over this same value.
-    - **Write-only**: the value is never stored, so a default would put into a
-      plan what must show null.
-
-    A computed-only attribute would be a third, since the practitioner cannot
-    write it -- but `PvsAttribute` refuses that combination outright (Rule 5), so
-    it cannot reach here.
+    Only then is there an omission for a default to fill -- and declaring a
+    default is the only way to say so. The combinations where a default would
+    have to be ignored are refused at schema construction rather than silently
+    dropped here: `PvsAttribute` rejects a default on a required attribute
+    (Rule 9), on a write-only one (Rule 10) and on a computed-only one (Rule 8),
+    so an attribute that carries a default is always one the practitioner could
+    have written and left out.
     """
-    return not (attribute.default is None or attribute.required or attribute.write_only)
+    return attribute.default is not None
 
 
 def resolve_schema_defaults(value: CtyValue | None, block: PvsObjectType) -> CtyValue | None:
@@ -92,7 +88,8 @@ def _resolve_attribute(value: Any, attribute: PvsAttribute) -> Any:
     """Return one attribute's value with its own default and any object members resolved."""
     if attribute.write_only:
         # A write-only value is never stored, so nothing inside it may be filled
-        # in either.
+        # in either. The attribute cannot carry a default of its own (Rule 10);
+        # this stops the defaults its object members declare.
         return value
 
     resolved = value
@@ -167,8 +164,9 @@ def _merge_attribute_default(
 ) -> None:
     """Correct one planned attribute against the value the configuration resolved."""
     if attribute.write_only:
-        # A write-only value is never stored, so a default would put into the
-        # plan what must show null.
+        # A write-only value is never stored, so nothing inside it may be
+        # planned either. The attribute cannot carry a default of its own
+        # (Rule 10); this stops the defaults its object members declare.
         return
     # An unknown value is not yet known, not absent: Terraform is about to
     # compute it, and planning the default would contradict that.
@@ -186,7 +184,7 @@ def _merge_attribute_default(
 
     if attribute.default is None:
         return
-    if not resolves_from_configuration(attribute) or _is_null(resolved):
+    if _is_null(resolved):
         # No resolved configuration to follow -- fall back to the declared
         # default, but never over a value the plan already holds.
         if merged.get(name) is None:

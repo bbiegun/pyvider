@@ -186,16 +186,55 @@ class PvsAttribute:
                 f"computed={is_comp}, default={self.default!r}"
             )
 
-        # Rule 9: An attribute with a default is Optional *and* Computed -- the
+        # Rule 9: A required attribute cannot have a default. A default is the
+        # value used when the practitioner omits the attribute, and `required`
+        # means they cannot omit it -- so the default could never be reached, and
+        # filling one in would mask the missing value from the required-attribute
+        # check.
+        if self.default is not None and self.required:
+            raise ValueError(
+                f"Invalid schema attribute configuration for '{self.name}': "
+                f"A required attribute cannot declare a default.\n\n"
+                f"A default applies to an attribute the practitioner omitted, and a "
+                f"required attribute must always be set -- so the default would never "
+                f"be used, and filling one in would hide a missing required value.\n\n"
+                f"Suggestion: Choose one of the following:\n"
+                f"  - optional=True, default=...: The practitioner may set it, and the "
+                f"provider uses the default otherwise\n"
+                f"  - required=True, no default: The practitioner must always supply a "
+                f"value\n\n"
+                f"Current configuration: required={is_req}, optional={is_opt}, "
+                f"computed={is_comp}, default={self.default!r}"
+            )
+
+        # Rule 10: A write-only attribute cannot have a default. Terraform
+        # requires every write-only value to be null in both prior and planned
+        # state, so a default would put into the plan what must show null -- and
+        # a write-only attribute cannot be computed, which a default requires.
+        if self.default is not None and self.write_only:
+            raise ValueError(
+                f"Invalid schema attribute configuration for '{self.name}': "
+                f"A write-only attribute cannot declare a default.\n\n"
+                f"Terraform requires every write-only value to be null in both prior "
+                f"and planned state, so a provider-supplied default would put into the "
+                f"plan the very value that must show null.\n\n"
+                f"Suggestion: Choose one of the following:\n"
+                f"  - write_only=True, no default: Apply the fallback inside the "
+                f"resource's own create/update logic, where the value is never stored\n"
+                f"  - default=..., write_only=False: The value is defaulted and stored "
+                f"in state like any other attribute\n\n"
+                f"Current configuration: required={is_req}, optional={is_opt}, "
+                f"computed={is_comp}, write_only={self.write_only}, default={self.default!r}"
+            )
+
+        # Rule 11: An attribute with a default is Optional *and* Computed -- the
         # practitioner may set it, and the provider fills it in otherwise.
         # Terraform rejects a provider-supplied value on an attribute that is not
         # computed, so a default is unusable without the flag.
         #
-        # Required and write-only attributes are left alone: neither can be
-        # computed. `default=None` is indistinguishable from declaring no
-        # default; there is no way to express "defaults to null", which is what a
-        # null already is.
-        if self.default is not None and not self.required and not self.write_only:
+        # `default=None` is indistinguishable from declaring no default; there is
+        # no way to express "defaults to null", which is what a null already is.
+        if self.default is not None:
             object.__setattr__(self, "computed", True)
 
 

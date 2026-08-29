@@ -90,20 +90,18 @@ class TestSchemaFlags:
         assert attribute.optional is True
         assert attribute.computed is False
 
-    def test_required_attribute_is_not_made_computed(self) -> None:
+    def test_required_attribute_rejects_a_default(self) -> None:
         # Required and Computed is a contradiction the schema rejects outright,
-        # so a default on a required attribute must not force the flag on.
-        attribute = a_str(required=True, default=DEFAULT_SIZE)
+        # and a default on a required attribute could never be reached, so the
+        # combination is refused rather than silently ignored.
+        with pytest.raises(ValueError, match="required attribute cannot declare a default"):
+            a_str(required=True, default=DEFAULT_SIZE)
 
-        assert attribute.required is True
-        assert attribute.computed is False
-
-    def test_write_only_attribute_is_not_made_computed(self) -> None:
-        # A write-only value is never stored, so it cannot be computed.
-        attribute = a_str(optional=True, write_only=True, default=DEFAULT_SIZE)
-
-        assert attribute.write_only is True
-        assert attribute.computed is False
+    def test_write_only_attribute_rejects_a_default(self) -> None:
+        # A write-only value is never stored, so it cannot be computed and a
+        # default would plan the value that must show null.
+        with pytest.raises(ValueError, match="write-only attribute cannot declare a default"):
+            a_str(optional=True, write_only=True, default=DEFAULT_SIZE)
 
 
 class TestConfigDecoding:

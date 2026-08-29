@@ -38,8 +38,8 @@ SCHEMA = s_resource(
         "size": a_str(default="small"),
         "learning": a_bool(default=True),
         "explicit_null": a_str(),
-        "secret": a_str(write_only=True, default="hunter2"),
-        "mandatory": a_str(required=True, default="ignored"),
+        "secret": a_str(write_only=True),
+        "mandatory": a_str(required=True),
     }
 )
 
@@ -82,15 +82,15 @@ class TestAttributeResolution:
         assert resolved.value["explicit_null"].is_null
 
     def test_write_only_attribute_is_not_filled(self) -> None:
-        # A write-only value is never stored, so a default would be written into
-        # a plan that must show null.
+        # A write-only attribute cannot declare a default at all, so nothing
+        # ever fills one in.
         resolved = resolve_schema_defaults(_config(), SCHEMA.block)
 
         assert resolved.value["secret"].is_null
 
     def test_required_attribute_is_not_filled(self) -> None:
-        # Otherwise a default would mask a missing required attribute from the
-        # required-attribute check that runs over this same value.
+        # A required attribute cannot declare a default at all, so a missing
+        # required value stays null for the required-attribute check to catch.
         resolved = resolve_schema_defaults(_config(), SCHEMA.block)
 
         assert resolved.value["mandatory"].is_null
